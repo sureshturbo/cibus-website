@@ -1,0 +1,31 @@
+{
+  "name": "cibus",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Cibus Trading e-commerce platform - customer storefront, admin panel, and REST API",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.11.0"
+  },
+  "scripts": {
+    "dev": "npm-run-all --parallel dev:api dev:storefront dev:admin",
+    "dev:api": "npm run dev --workspace @cibus/api",
+    "dev:storefront": "npm run dev --workspace @cibus/storefront",
+    "dev:admin": "npm run dev --workspace @cibus/admin",
+    "build": "npm run build --workspace @cibus/shared && npm run build --workspace @cibus/api && npm run build --workspace @cibus/storefront && npm run build --workspace @cibus/admin",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "prisma:generate": "npm run prisma:generate --workspace @cibus/api",
+    "prisma:migrate": "npm run prisma:migrate --workspace @cibus/api",
+    "prisma:seed": "npm run prisma:seed --workspace @cibus/api",
+    "prisma:studio": "npm run prisma:studio --workspace @cibus/api"
+  },
+  "devDependencies": {
+    "npm-run-all": "4.1.5",
+    "typescript": "5.7.3"
+  }
+}

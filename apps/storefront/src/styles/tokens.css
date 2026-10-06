@@ -1,0 +1,136 @@
+/*
+ * Design tokens transcribed from the reference storefront's theme CSS.
+ *
+ * The reference uses a three-colour split that has to be respected: `--c-base`
+ * is a dark green safe for text and fills, `--c-primary` is a light green that
+ * only ever fails contrast on white and therefore stays decorative, and
+ * `--c-ink` carries all body copy. Conflating base and primary is the single
+ * easiest way to make this palette unreadable.
+ */
+
+:root {
+  /* ------------------------------- colour ------------------------------- */
+
+  /* All body copy, headings and links. */
+  --c-ink: #253d4e;
+  /* Secondary copy: captions, meta, placeholder text. */
+  --c-ink-soft: #5f6e79;
+  /* Header main row sits a shade darker than body ink, as in the reference. */
+  --c-ink-header: #0f2401;
+
+  /* Dark green: buttons, filled controls, anything text-safe. */
+  --c-base: #366b11;
+  --c-base-hover: #3d850a;
+  /* Text-coloured button variant. */
+  --c-base-text: #1b3a05;
+
+  /* Light green: hover states, counters, decorative fills only. */
+  --c-primary: #61b482;
+  --c-counter: #357308;
+  --c-mobile-nav: #3c6e07;
+
+  --c-surface: #ffffff;
+  --c-page: #ffffff;
+  --c-line: #e3e7ea;
+  --c-line-soft: #eef1f2;
+
+  /* Campaign bar and the tinted bands that break up the page. */
+  --c-campaign: #0b6b00;
+  --c-campaign-ink: #ffffff;
+  --c-wash: #efffe3;
+  --c-wash-warm: #ffe0c2;
+  --c-warm-ink: #ff0000;
+
+  --c-danger: #c62828;
+  --c-danger-wash: #fdf3f1;
+  --c-success: #2e7d32;
+  --c-star: #f5a623;
+  --c-sold-out: #f2f2f2;
+
+  /* ------------------------------- shape -------------------------------- */
+
+  /* The reference rounds media gently and controls completely. */
+  --radius-image: 10px;
+  --radius-control: 30px;
+  --radius-pill: 999px;
+  --radius-sm: 6px;
+
+  /* ------------------------------ spacing ------------------------------- */
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --space-20: 5rem;
+
+  --section-gap: clamp(2.5rem, 5vw, 4.5rem);
+
+  /* ----------------------------- typography ----------------------------- */
+
+  --font-sans: "Albert Sans", ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+  --text-3xl: clamp(1.5rem, 3vw, 2rem);
+  --text-display: clamp(2rem, 4.5vw, 3.25rem);
+
+  --leading-tight: 1.15;
+  --leading-snug: 1.4;
+  --leading-body: 1.65;
+
+  /* --------------------------- structure -------------------------------- */
+
+  --container: 1280px;
+  --gutter: 20px;
+
+  --header-main: 70px;
+  --header-bottom: 60px;
+  --logo-desktop: 60px;
+  --logo-mobile: 50px;
+  --mobile-nav: 67px;
+  --search-field: 400px;
+
+  /* ---------------------------- elevation ------------------------------- */
+
+  --shadow-sm: 0 1px 2px rgba(37, 61, 78, 0.06), 0 1px 3px rgba(37, 61, 78, 0.08);
+  --shadow-md: 0 4px 16px rgba(37, 61, 78, 0.1);
+  --shadow-lg: 0 12px 40px rgba(37, 61, 78, 0.16);
+  --header-shadow: 0 1px 0 #d1d1d1;
+
+  /* ---------------------------- transitions ----------------------------- */
+
+  --t-fast: 150ms ease;
+  --t-base: 250ms ease;
+
+  --z-header: 100;
+  --z-mobile-nav: 110;
+  --z-sheet: 200;
+  --z-toast: 300;
+}
+
+/*
+ * The reference reserves space for the bottom tab bar so fixed furniture never
+ * covers the last row of content.
+ */
+@media (max-width: 1024px) {
+  :root {
+    --mobile-nav-reserve: 67px;
+  }
+}
+
+@media (min-width: 1025px) {
+  :root {
+    --mobile-nav-reserve: 0px;
+  }
+}
