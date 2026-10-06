@@ -1,7 +1,10 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
+  // In production the admin is served by the API under /admin, so built asset
+  // URLs need that prefix. In development it runs at the dev server root.
+  base: mode === "production" ? "/admin/" : "/",
   plugins: [react()],
   server: {
     // Kept off the storefront's port so both can run side by side.
@@ -13,4 +16,4 @@ export default defineConfig({
       "/health": { target: "http://localhost:4000", changeOrigin: true },
     },
   },
-});
+}));

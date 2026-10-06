@@ -250,6 +250,30 @@ depth is correct for both.
 Production boot refuses insecure defaults (dev JWT secrets, default admin
 password, localhost in `CORS_ORIGINS`).
 
+## Production hosting (cPanel)
+
+The API can serve the built storefront and admin from the same origin. Same-origin
+is required, not cosmetic: auth is httpOnly cookies, which behave badly across
+origins without a CORS and cookie-domain setup we deliberately avoid.
+
+- `STOREFRONT_DIR` → absolute path to `apps/storefront/dist`, served at `/`.
+- `ADMIN_DIR` → absolute path to `apps/admin/dist`, served under `ADMIN_PATH`
+  (default `/admin`).
+- Both are unset locally, so Vite still serves the UIs and proxies `/api`.
+- When either is set: the API's `GET /` info JSON is suppressed (the storefront
+  owns `/`), `securityHeaders` switches app paths to the SPA CSP (`APP_CSP` in
+  `middleware/common.ts`; the strict API CSP still applies to `/api`, `/health`,
+  `/uploads`), the general rate limiter is scoped to `/api` so static assets are
+  not throttled, and the SPA fallbacks 404 a missing asset instead of returning
+  the shell.
+- The admin build uses `base: "/admin/"` in production only, and the router
+  basename is derived from `import.meta.env.BASE_URL`, so the dev server stays at
+  `/` on :5174.
+
+Deploy order on the server (Terminal): `npm install` (runs `prisma generate` on
+Linux via postinstall), `npm run build` (shared → api → storefront → admin), then
+`cd apps/api && npx prisma migrate deploy` and `npx tsx prisma/seed.ts`.
+
 ## Known pitfalls
 
 - **Basis points.** `BASIS_POINTS_PER_PERCENT` (100) converts a percent figure to

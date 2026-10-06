@@ -45,13 +45,29 @@ export const accessLog: RequestHandler = (req: Request, res: Response, next: Nex
 
 /* ---------------------------- security headers ---------------------------- */
 
+/* The API's own responses are JSON or uploaded media, never a document, so the
+ * strictest possible policy applies. When a built storefront/admin is served
+ * from the same origin (see STOREFRONT_DIR / ADMIN_DIR) the document responses
+ * need a working policy instead: hashed Vite assets from 'self', Google-hosted
+ * fonts, and the inline style attributes React sets on elements. */
+const API_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+const APP_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data: blob:",
+  "connect-src 'self'",
+  "base-uri 'self'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+].join("; ");
+
 export const securityHeaders: RequestHandler = (req: Request, res: Response, next: NextFunction) => {
-  // The API serves JSON and uploaded media; it never renders HTML, so the
-  // strictest possible CSP applies.
-  res.setHeader(
-    "Content-Security-Policy",
-    "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
-  );
+  const servesApp = Boolean(env.STOREFRONT_DIR || env.ADMIN_DIR);
+  const isApiRoute =
+    req.path.startsWith("/api") || req.path.startsWith("/health") || req.path.startsWith("/uploads");
+  res.setHeader("Content-Security-Policy", servesApp && !isApiRoute ? APP_CSP : API_CSP);
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");

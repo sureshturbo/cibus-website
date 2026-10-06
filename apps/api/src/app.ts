@@ -1,6 +1,6 @@
 import express, { Router } from "express";
 import path from "node:path";
-import type { Express, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 import compression from "compression";
 import cookieParser from "cookie-parser";
 import cors from "cors";
@@ -74,7 +74,10 @@ export function createApp(): Express {
   app.use(express.json({ limit: "256kb" }));
   app.use(express.urlencoded({ extended: false, limit: "256kb" }));
 
-  app.use(generalLimiter);
+  /* Scoped to the API. When the built UIs are served from this origin each page
+   * load pulls many hashed assets, and a shared-IP office would otherwise burn
+   * the whole per-IP budget on static files. */
+  app.use("/api", generalLimiter);
 
   /* ------------------------------- routes ------------------------------- */
 
@@ -83,18 +86,20 @@ export function createApp(): Express {
    * human opens the base URL in a browser. Point at the real entry points
    * instead.
    */
-  app.get("/", (_req, res) => {
-    sendOk(res, {
-      service: "cibus-api",
-      version: "1.0.0",
-      environment: env.NODE_ENV,
-      paths: {
-        health: "/health",
-        readiness: "/health/ready",
-        api: "/api",
-      },
+  if (!env.STOREFRONT_DIR) {
+    app.get("/", (_req, res) => {
+      sendOk(res, {
+        service: "cibus-api",
+        version: "1.0.0",
+        environment: env.NODE_ENV,
+        paths: {
+          health: "/health",
+          readiness: "/health/ready",
+          api: "/api",
+        },
+      });
     });
-  });
+  }
 
   app.use("/health", healthRouter);
   app.use("/api/public", publicRouter);
@@ -130,6 +135,46 @@ export function createApp(): Express {
         maxAge: "365d",
       }),
     );
+  }
+
+  /* Optional single-origin hosting: serve the built storefront/admin so the
+   * browser stays on one origin and the httpOnly auth cookies need no cross-site
+   * setup. Registered after the API routes, so /api, /health and /uploads always
+   * win. All of this is unset in development. */
+  const adminPath = env.ADMIN_PATH.replace(/\/+$/, "") || "/admin";
+
+  if (env.ADMIN_DIR) {
+    const adminDir = path.resolve(env.ADMIN_DIR);
+    app.use(adminPath, express.static(adminDir, { dotfiles: "deny" }));
+    app.get(`${adminPath}/*`, (req: Request, res: Response, next: () => void) => {
+      /* A missing asset (a path with an extension) is a 404, not the SPA shell. */
+      if (path.extname(req.path)) {
+        next();
+        return;
+      }
+      res.sendFile(path.join(adminDir, "index.html"));
+    });
+  }
+
+  if (env.STOREFRONT_DIR) {
+    const storefrontDir = path.resolve(env.STOREFRONT_DIR);
+    app.use(express.static(storefrontDir, { dotfiles: "deny" }));
+    app.get("*", (req: Request, res: Response, next) => {
+      /* Never let the SPA fallback answer an API path or the admin panel: those
+       * must 404 as JSON, or be handled by the admin block above. And a request
+       * for a missing asset (an extension) is a 404, not the SPA shell. */
+      if (
+        req.path.startsWith("/api") ||
+        req.path.startsWith("/health") ||
+        req.path.startsWith("/uploads") ||
+        path.extname(req.path) ||
+        (env.ADMIN_DIR && (req.path === adminPath || req.path.startsWith(`${adminPath}/`)))
+      ) {
+        next();
+        return;
+      }
+      res.sendFile(path.join(storefrontDir, "index.html"));
+    });
   }
 
   app.use(notFoundHandler);

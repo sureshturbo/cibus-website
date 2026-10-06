@@ -70,6 +70,16 @@ const schema = z.object({
   UPLOAD_MAX_BYTES: z.coerce.number().int().min(1024).max(20 * 1024 * 1024).default(5 * 1024 * 1024),
   SERVE_UPLOADS: booleanish.default("true"),
 
+  /* When set to a built storefront directory, the API serves it from the same
+   * origin as /api at the root. Left unset in development, where Vite serves the
+   * UI itself and proxies /api to this server. */
+  STOREFRONT_DIR: z.string().min(1).optional(),
+
+  /* When set to a built admin directory, the API serves it under ADMIN_PATH so
+   * the admin panel shares the storefront's origin and cookies. */
+  ADMIN_DIR: z.string().min(1).optional(),
+  ADMIN_PATH: z.string().default("/admin"),
+
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 
   SEED_ADMIN_EMAIL: z.string().email().default("admin@cibus.local"),
