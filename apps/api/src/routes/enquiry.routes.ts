@@ -2,7 +2,7 @@ import { Router } from "express";
 import { partnerEnquirySchema } from "@cibus/shared";
 import { controller } from "../lib/controller.js";
 import { sendOk, validate } from "../lib/http.js";
-import { prisma } from "../lib/prisma.js";
+import { insertPartnerEnquiry } from "../db/repositories/enquiry.repo.js";
 import { enquiryLimiter } from "../middleware/rateLimit.js";
 import type { z } from "zod";
 
@@ -22,15 +22,12 @@ enquiryRouter.post(
   controller(async (req, res) => {
     const body = req.body as z.infer<typeof partnerEnquirySchema>;
 
-    const enquiry = await prisma.partnerEnquiry.create({
-      data: {
-        name: body.name,
-        businessName: body.businessName,
-        email: body.email,
-        phone: body.phone,
-        message: body.message,
-      },
-      select: { id: true, name: true, businessName: true, createdAt: true },
+    const enquiry = await insertPartnerEnquiry({
+      name: body.name,
+      businessName: body.businessName,
+      email: body.email,
+      phone: body.phone,
+      message: body.message,
     });
 
     sendOk(

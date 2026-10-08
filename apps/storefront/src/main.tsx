@@ -9,6 +9,7 @@ import "./styles/chrome.css";
 import "./styles/shop.css";
 import "./styles/pages.css";
 import "./styles/flows.css";
+import "./styles/admin.css";
 
 const container = document.getElementById("root");
 if (!container) throw new Error("Root element #root is missing from index.html");

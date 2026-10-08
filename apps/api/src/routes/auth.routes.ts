@@ -10,7 +10,23 @@ import {
 } from "../lib/crypto.js";
 import { clearAuthCookies, setAuthCookies } from "../lib/authCookies.js";
 import { clientIp, userAgent } from "../middleware/common.js";
-import { prisma } from "../lib/prisma.js";
+import { transaction } from "../db/pool.js";
+import {
+  clearDefaultAddresses,
+  deleteAddress,
+  deleteRevokedSessionsForCustomer,
+  findCustomerByEmail,
+  findCustomerById,
+  findSessionByHash,
+  insertAddress,
+  insertCustomer,
+  insertRefreshSession,
+  listAddressRows,
+  revokeSessionById,
+  revokeSessionByHash,
+  revokeSessionsForCustomer,
+  updateCustomer,
+} from "../db/repositories/auth.repo.js";
 import { ConflictError, NotFoundError, UnauthenticatedError, ValidationError } from "../lib/errors.js";
 import { sendOk, validate } from "../lib/http.js";
 import { authLimiter } from "../middleware/rateLimit.js";
@@ -69,14 +85,13 @@ async function issueSession(
   const { token, hash } = generateRefreshToken();
   const expiresAt = refreshTokenExpiryDate();
 
-  await prisma.refreshSession.create({
-    data: {
-      customerId: account.id,
-      tokenHash: hash,
-      userAgent: ctx.userAgent ?? null,
-      ipAddress: ctx.ipAddress ?? null,
-      expiresAt,
-    },
+  await insertRefreshSession({
+    customerId: account.id,
+    adminId: null,
+    tokenHash: hash,
+    userAgent: ctx.userAgent ?? null,
+    ipAddress: ctx.ipAddress ?? null,
+    expiresAt,
   });
 
   const accessToken = signAccessToken({ sub: account.id, aud: "customer", email: account.email });
@@ -96,13 +111,16 @@ authRouter.post(
   controller(async (req, res) => {
     const { email, password, fullName, phone } = req.body as z.infer<typeof registerSchema>;
 
-    const existing = await prisma.customer.findUnique({ where: { email }, select: { id: true } });
+    const existing = await findCustomerByEmail(email);
     if (existing) {
       throw new ConflictError("An account with that email already exists");
     }
 
-    const customer = await prisma.customer.create({
-      data: { email, passwordHash: await hashPassword(password), fullName, phone: phone ?? null },
+    const customer = await insertCustomer({
+      email,
+      passwordHash: await hashPassword(password),
+      fullName,
+      phone: phone ?? null,
     });
 
     await issueSession(res, customer, sessionContext(req));
@@ -119,7 +137,7 @@ authRouter.post(
   controller(async (req, res) => {
     const { email, password } = req.body as z.infer<typeof loginSchema>;
 
-    const customer = await prisma.customer.findUnique({ where: { email } });
+    const customer = await findCustomerByEmail(email);
 
     // Always run a verification so a missing account and a wrong password take
     // comparable time, leaving no timing oracle for account enumeration.
@@ -147,10 +165,7 @@ authRouter.post(
     const token = req.cookies?.["cibus_refresh"] as string | undefined;
     if (!token) throw new UnauthenticatedError("No active session");
 
-    const session = await prisma.refreshSession.findUnique({
-      where: { tokenHash: hashRefreshToken(token) },
-      include: { customer: true },
-    });
+    const session = await findSessionByHash(hashRefreshToken(token));
 
     if (!session || session.revokedAt || session.expiresAt < new Date() || !session.customerId) {
       // A token that no longer resolves is either replayed or forged. Drop any
@@ -158,9 +173,7 @@ authRouter.post(
       throw new UnauthenticatedError("Your session has expired. Please sign in again.");
     }
 
-    // An admin session has no customer; the guard above already excluded it, but
-    // the include is optional so the type has to be narrowed explicitly.
-    const customer = session.customer;
+    const customer = await findCustomerById(session.customerId);
     if (!customer) throw new UnauthenticatedError("Your session has expired. Please sign in again.");
     if (!customer.isActive) throw new UnauthenticatedError("This account is no longer active");
 
@@ -168,24 +181,21 @@ authRouter.post(
     const { token: fresh, hash } = generateRefreshToken();
     const expiresAt = refreshTokenExpiryDate();
 
-    await prisma.$transaction([
-      prisma.refreshSession.update({
-        where: { id: session.id },
-        data: { revokedAt: new Date() },
-      }),
-      prisma.refreshSession.create({
-        data: {
+    await transaction(async (tx) => {
+      await revokeSessionById(session.id, tx);
+      await insertRefreshSession(
+        {
           customerId: customer.id,
+          adminId: null,
           tokenHash: hash,
           userAgent: userAgent(req) ?? null,
           ipAddress: clientIp(req),
           expiresAt,
         },
-      }),
-      prisma.refreshSession.deleteMany({
-        where: { customerId: customer.id, revokedAt: { not: null } },
-      }),
-    ]);
+        tx,
+      );
+      await deleteRevokedSessionsForCustomer(customer.id, tx);
+    });
 
     const accessToken = signAccessToken({ sub: customer.id, aud: "customer", email: customer.email });
     setAuthCookies(res, { accessToken, refreshToken: fresh, refreshExpiresAt: expiresAt });
@@ -200,10 +210,7 @@ authRouter.post(
   controller(async (req, res) => {
     const token = req.cookies?.["cibus_refresh"] as string | undefined;
     if (token) {
-      await prisma.refreshSession.updateMany({
-        where: { tokenHash: hashRefreshToken(token), revokedAt: null },
-        data: { revokedAt: new Date() },
-      });
+      await revokeSessionByHash(hashRefreshToken(token));
     }
     clearAuthCookies(res);
     sendOk(res, { loggedOut: true });
@@ -215,11 +222,7 @@ authRouter.post(
   "/logout-all",
   requireCustomer,
   controller(async (req, res) => {
-    const customerId = req.auth!.id;
-    await prisma.refreshSession.updateMany({
-      where: { customerId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
+    await revokeSessionsForCustomer(req.auth!.id);
     clearAuthCookies(res);
     sendOk(res, { loggedOutEverywhere: true });
   }),
@@ -235,7 +238,7 @@ authRouter.get(
       sendOk(res, { authenticated: false, user: null });
       return;
     }
-    const customer = await prisma.customer.findUnique({ where: { id: req.auth.id } });
+    const customer = await findCustomerById(req.auth.id);
     if (!customer || !customer.isActive) {
       clearAuthCookies(res);
       sendOk(res, { authenticated: false, user: null });
@@ -253,12 +256,9 @@ authRouter.patch(
   validate(updateProfileSchema),
   controller(async (req, res) => {
     const body = req.body as z.infer<typeof updateProfileSchema>;
-    const customer = await prisma.customer.update({
-      where: { id: req.auth!.id },
-      data: {
-        ...(body.fullName !== undefined ? { fullName: body.fullName } : {}),
-        ...(body.phone !== undefined ? { phone: body.phone || null } : {}),
-      },
+    const customer = await updateCustomer(req.auth!.id, {
+      ...(body.fullName !== undefined ? { fullName: body.fullName } : {}),
+      ...(body.phone !== undefined ? { phone: body.phone || null } : {}),
     });
     sendOk(res, { user: publicCustomer(customer) });
   }),
@@ -271,22 +271,18 @@ authRouter.post(
   validate(changePasswordSchema),
   controller(async (req, res) => {
     const { currentPassword, newPassword } = req.body as z.infer<typeof changePasswordSchema>;
-    const customer = await prisma.customer.findUniqueOrThrow({ where: { id: req.auth!.id } });
+    const customer = await findCustomerById(req.auth!.id);
+    if (!customer) throw new UnauthenticatedError();
 
     const ok = await verifyPassword(customer.passwordHash, currentPassword);
     if (!ok) throw new ValidationError("Your current password is incorrect");
 
-    await prisma.$transaction([
-      prisma.customer.update({
-        where: { id: customer.id },
-        data: { passwordHash: await hashPassword(newPassword) },
-      }),
+    const passwordHash = await hashPassword(newPassword);
+    await transaction(async (tx) => {
+      await updateCustomer(customer.id, { passwordHash }, tx);
       // Changing a password invalidates every existing session, including this one.
-      prisma.refreshSession.updateMany({
-        where: { customerId: customer.id, revokedAt: null },
-        data: { revokedAt: new Date() },
-      }),
-    ]);
+      await revokeSessionsForCustomer(customer.id, tx);
+    });
 
     clearAuthCookies(res);
     sendOk(res, { passwordChanged: true });
@@ -301,10 +297,7 @@ authRouter.get(
   "/addresses",
   requireCustomer,
   controller(async (req, res) => {
-    const addresses = await prisma.address.findMany({
-      where: { customerId: req.auth!.id },
-      orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
-    });
+    const addresses = await listAddressRows(req.auth!.id);
     sendOk(res, { addresses });
   }),
 );
@@ -317,12 +310,12 @@ authRouter.post(
     const body = req.body as z.infer<typeof addressBookEntrySchema>;
     const customerId = req.auth!.id;
 
-    const address = await prisma.$transaction(async (tx) => {
+    const address = await transaction(async (tx) => {
       if (body.isDefault) {
-        await tx.address.updateMany({ where: { customerId }, data: { isDefault: false } });
+        await clearDefaultAddresses(customerId, tx);
       }
-      return tx.address.create({
-        data: {
+      return insertAddress(
+        {
           customerId,
           label: body.label,
           fullName: body.fullName,
@@ -335,7 +328,8 @@ authRouter.post(
           landmark: body.landmark || null,
           isDefault: body.isDefault,
         },
-      });
+        tx,
+      );
     });
 
     sendOk(res, { address }, 201);
@@ -347,9 +341,10 @@ authRouter.delete(
   requireCustomer,
   validate(addressIdParam, "params"),
   controller(async (req, res) => {
-    const id = param(req, "id");
-    const { count } = await prisma.address.deleteMany({ where: { id, customerId: req.auth!.id } });
-    if (count === 0) throw new NotFoundError("Address");
+    const affected = await deleteAddress(param(req, "id"), req.auth!.id);
+    if (affected === 0) throw new NotFoundError("Address");
     sendOk(res, { deleted: true });
   }),
 );
+
+export { publicCustomer };

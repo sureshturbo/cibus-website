@@ -1,26 +1,24 @@
-import { OrderStatus, Prisma } from "@prisma/client";
-import { prisma } from "../lib/prisma.js";
+import { db } from "../db/pool.js";
+import { env } from "../config/env.js";
 import { findLowStockProducts } from "./stock.service.js";
 
 /**
- * Dashboard metrics.
+ * Dashboard service.
  *
- * Every figure is aggregated in SQL rather than by loading rows and reducing in
+ * Every figure is aggregated in SQL rather than loaded and reduced in
  * JavaScript, so the cost stays flat as the order table grows.
  *
  * Revenue deliberately counts orders that are not cancelled or refunded. There
- * is no payment column yet, so "revenue" here means "value of live orders", and
- * the label in the UI says exactly that.
+ * is no payment column, so "revenue" here means "value of live orders", and the
+ * UI says exactly that rather than implying cash in the bank.
  */
 
-const LIVE_STATUSES: OrderStatus[] = [
-  "PENDING",
-  "CONFIRMED",
-  "PROCESSING",
-  "READY",
-  "OUT_FOR_DELIVERY",
-  "DELIVERED",
-];
+/** Statuses that still count toward live order value. */
+const LIVE_STATUSES = ["PENDING", "CONFIRMED", "PROCESSING", "READY", "OUT_FOR_DELIVERY", "DELIVERED"];
+
+/** Inlined rather than bound: these are server constants, never user input. */
+const LIVE_STATUS_LIST = LIVE_STATUSES.map((status) => `'${status}'`).join(", ");
+const FULFILMENT_STATUS_LIST = "'PENDING', 'CONFIRMED', 'PROCESSING', 'READY', 'OUT_FOR_DELIVERY'";
 
 export interface DashboardSummary {
   orders: {
@@ -37,7 +35,7 @@ export interface DashboardSummary {
     last7DaysValue: number;
     averageOrderValue: number;
     currency: string;
-    /** True while no payment gateway is integrated. */
+    /** Always false while no payment gateway is integrated. */
     isCommittedRevenue: false;
   };
   catalogue: {
@@ -62,151 +60,151 @@ export interface DashboardSummary {
   };
   attention: {
     lowStockCount: number;
-    lowStockItems: Array<{ id: number; name: string; sku: string; stockQuantity: number; lowStockThreshold: number; unitLabel: string }>;
+    lowStockItems: Array<{
+      id: number;
+      name: string;
+      sku: string;
+      stockQuantity: number;
+      lowStockThreshold: number;
+      unitLabel: string;
+    }>;
     newestEnquiries: number;
   };
   recentOrders: Array<{
     id: number;
     orderNumber: string;
     customerName: string;
+    status: string;
     total: number;
-    status: OrderStatus;
     createdAt: Date;
   }>;
   generatedAt: Date;
 }
 
-export async function getDashboardSummary(currency: string): Promise<DashboardSummary> {
+export async function getDashboardSummary(): Promise<DashboardSummary> {
   const now = new Date();
-  const sevenDaysAgo = new Date(now.getTime() - 7 * 86_400_000);
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
   const [
     totalOrders,
-    statusGroups,
+    statusRows,
     last7Days,
     deliveredToday,
-    revenueAggregate,
-    deliveredAggregate,
+    liveValue,
+    deliveredValue,
     sevenDayValue,
-    productCounts,
-    categoryCount,
-    outOfStock,
-    activeOffers,
-    scheduledOffers,
-    redemptions,
-    discountGiven,
-    fulfilmentGroups,
+    productRow,
+    categoryRow,
+    outOfStockRow,
+    activeOffersRow,
+    scheduledOffersRow,
+    redemptionsRow,
+    discountRow,
+    fulfilmentRows,
     lowStock,
-    enquiryCount,
+    enquiryRow,
     recentOrders,
   ] = await Promise.all([
-    prisma.order.count(),
-
-    prisma.order.groupBy({ by: ["status"], _count: { _all: true } }),
-
-    prisma.order.count({ where: { createdAt: { gte: sevenDaysAgo } } }),
-
-    prisma.order.count({
-      where: { status: "DELIVERED", deliveredAt: { gte: todayStart } },
-    }),
-
-    prisma.order.aggregate({
-      _sum: { total: true },
-      where: { status: { in: LIVE_STATUSES } },
-    }),
-
-    prisma.order.aggregate({
-      _sum: { total: true },
-      where: { status: "DELIVERED" },
-    }),
-
-    prisma.order.aggregate({
-      _sum: { total: true },
-      where: { createdAt: { gte: sevenDaysAgo }, status: { in: LIVE_STATUSES } },
-    }),
-
-    Promise.all([
-      prisma.product.count({ where: { deletedAt: null } }),
-      prisma.product.count({ where: { isActive: true, deletedAt: null } }),
-      prisma.product.count({ where: { isFeatured: true, isActive: true, deletedAt: null } }),
-    ]),
-
-    prisma.category.count({ where: { isActive: true } }),
-
-    prisma.product.count({
-      where: { isActive: true, deletedAt: null, stockQuantity: { lte: 0 }, allowBackorder: false },
-    }),
-
-    prisma.offer.count({
-      where: { isActive: true, startsAt: { lte: now }, endsAt: { gte: now } },
-    }),
-
-    prisma.offer.count({ where: { isActive: true, startsAt: { gt: now } } }),
-
-    prisma.offerRedemption.count(),
-
-    prisma.offerRedemption.aggregate({ _sum: { discount: true } }),
-
-    prisma.order.groupBy({
-      by: ["status"],
-      where: { status: { in: ["PENDING", "CONFIRMED", "PROCESSING", "READY", "OUT_FOR_DELIVERY"] } },
-      _count: { _all: true },
-    }),
-
+    db.queryOne<{ total: number }>("SELECT COUNT(*) AS total FROM orders"),
+    db.query<{ status: string; total: number }>(
+      "SELECT status, COUNT(*) AS total FROM orders GROUP BY status",
+    ),
+    db.queryOne<{ total: number }>(
+      "SELECT COUNT(*) AS total FROM orders WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)",
+    ),
+    db.queryOne<{ total: number }>(
+      "SELECT COUNT(*) AS total FROM orders WHERE status = 'DELIVERED' AND delivered_at >= CURDATE()",
+    ),
+    db.queryOne<{ total: number | null }>(
+      `SELECT COALESCE(SUM(total), 0) AS total FROM orders WHERE status IN (${LIVE_STATUS_LIST})`,
+    ),
+    db.queryOne<{ total: number | null }>(
+      "SELECT COALESCE(SUM(total), 0) AS total FROM orders WHERE status = 'DELIVERED'",
+    ),
+    db.queryOne<{ total: number | null }>(
+      `SELECT COALESCE(SUM(total), 0) AS total FROM orders
+        WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) AND status IN (${LIVE_STATUS_LIST})`,
+    ),
+    db.queryOne<{ total: number; active: number | null; featured: number | null }>(
+      `SELECT COUNT(*) AS total,
+              COALESCE(SUM(is_active = 1), 0) AS active,
+              COALESCE(SUM(is_active = 1 AND is_featured = 1), 0) AS featured
+         FROM products WHERE deleted_at IS NULL`,
+    ),
+    db.queryOne<{ total: number }>("SELECT COUNT(*) AS total FROM categories WHERE is_active = 1"),
+    db.queryOne<{ total: number }>(
+      `SELECT COUNT(*) AS total FROM products
+        WHERE is_active = 1 AND deleted_at IS NULL AND stock_quantity <= 0 AND allow_backorder = 0`,
+    ),
+    db.queryOne<{ total: number }>(
+      "SELECT COUNT(*) AS total FROM offers WHERE is_active = 1 AND starts_at <= NOW() AND ends_at >= NOW()",
+    ),
+    db.queryOne<{ total: number }>(
+      "SELECT COUNT(*) AS total FROM offers WHERE is_active = 1 AND starts_at > NOW()",
+    ),
+    db.queryOne<{ total: number }>("SELECT COUNT(*) AS total FROM offer_redemptions"),
+    db.queryOne<{ total: number | null }>(
+      "SELECT COALESCE(SUM(discount), 0) AS total FROM offer_redemptions",
+    ),
+    db.query<{ status: string; total: number }>(
+      `SELECT status, COUNT(*) AS total FROM orders
+        WHERE status IN (${FULFILMENT_STATUS_LIST}) GROUP BY status`,
+    ),
     findLowStockProducts(10),
-
-    prisma.partnerEnquiry.count({ where: { status: "NEW" } }),
-
-    prisma.order.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 8,
-      select: { id: true, orderNumber: true, customerName: true, total: true, status: true, createdAt: true },
-    }),
+    db.queryOne<{ total: number }>(
+      "SELECT COUNT(*) AS total FROM partner_enquiries WHERE status = 'NEW'",
+    ),
+    db.query<{
+      id: number;
+      orderNumber: string;
+      customerName: string;
+      status: string;
+      total: number;
+      createdAt: Date;
+    }>(
+      `SELECT id, order_number AS orderNumber, customer_name AS customerName, status, total, created_at AS createdAt
+         FROM orders ORDER BY created_at DESC LIMIT 8`,
+    ),
   ]);
 
   const byStatus: Record<string, number> = {};
-  for (const group of statusGroups) {
-    byStatus[group.status] = group._count._all;
-  }
+  for (const row of statusRows) byStatus[row.status] = Number(row.total);
 
   const fulfilment: Record<string, number> = {};
-  for (const group of fulfilmentGroups) {
-    fulfilment[group.status] = group._count._all;
-  }
+  for (const row of fulfilmentRows) fulfilment[row.status] = Number(row.total);
 
-  const liveOrderValue = revenueAggregate._sum.total ?? 0;
+  const liveOrderValue = Number(liveValue?.total ?? 0);
   const liveOrders = LIVE_STATUSES.reduce((sum, status) => sum + (byStatus[status] ?? 0), 0);
 
   return {
     orders: {
-      total: totalOrders,
+      total: Number(totalOrders?.total ?? 0),
       byStatus,
-      last7Days,
+      last7Days: Number(last7Days?.total ?? 0),
       pendingAction: byStatus.PENDING ?? 0,
-      awaitingFulfilment: (byStatus.CONFIRMED ?? 0) + (byStatus.PROCESSING ?? 0) + (byStatus.READY ?? 0),
-      deliveredToday,
+      awaitingFulfilment:
+        (byStatus.CONFIRMED ?? 0) + (byStatus.PROCESSING ?? 0) + (byStatus.READY ?? 0),
+      deliveredToday: Number(deliveredToday?.total ?? 0),
     },
     revenue: {
       liveOrderValue,
-      deliveredValue: deliveredAggregate._sum.total ?? 0,
-      last7DaysValue: sevenDayValue._sum.total ?? 0,
+      deliveredValue: Number(deliveredValue?.total ?? 0),
+      last7DaysValue: Number(sevenDayValue?.total ?? 0),
       averageOrderValue: liveOrders > 0 ? Math.round(liveOrderValue / liveOrders) : 0,
-      currency,
+      currency: env.CURRENCY,
       isCommittedRevenue: false,
     },
     catalogue: {
-      totalProducts: productCounts[0],
-      activeProducts: productCounts[1],
-      featuredProducts: productCounts[2],
-      totalCategories: categoryCount,
-      outOfStock,
+      totalProducts: Number(productRow?.total ?? 0),
+      activeProducts: Number(productRow?.active ?? 0),
+      featuredProducts: Number(productRow?.featured ?? 0),
+      totalCategories: Number(categoryRow?.total ?? 0),
+      outOfStock: Number(outOfStockRow?.total ?? 0),
     },
     offers: {
-      active: activeOffers,
-      scheduled: scheduledOffers,
-      totalRedemptions: redemptions,
-      discountGiven: discountGiven._sum.discount ?? 0,
+      active: Number(activeOffersRow?.total ?? 0),
+      scheduled: Number(scheduledOffersRow?.total ?? 0),
+      totalRedemptions: Number(redemptionsRow?.total ?? 0),
+      discountGiven: Number(discountRow?.total ?? 0),
     },
     fulfilment: {
       pending: fulfilment.PENDING ?? 0,
@@ -218,80 +216,55 @@ export async function getDashboardSummary(currency: string): Promise<DashboardSu
     attention: {
       lowStockCount: lowStock.length,
       lowStockItems: lowStock,
-      newestEnquiries: enquiryCount,
+      newestEnquiries: Number(enquiryRow?.total ?? 0),
     },
-    recentOrders,
+    recentOrders: recentOrders.map((row) => ({ ...row, total: Number(row.total) })),
     generatedAt: now,
   };
 }
 
-/* ----------------------------- sales series ------------------------------ */
-
-/**
- * Daily order value for a period, for the dashboard trend line.
- * Grouped in SQL; zero-filled in JS so the chart has no gaps.
- */
-export async function getSalesSeries(days: number, currency: string) {
-  const clamped = Math.min(Math.max(days, 1), 90);
-  const from = new Date(Date.now() - clamped * 86_400_000);
-  from.setHours(0, 0, 0, 0);
-
-  const rows = await prisma.$queryRaw<Array<{ day: Date; orders: number; value: number }>>(Prisma.sql`
-    SELECT DATE(created_at) AS day, COUNT(*) AS orders, COALESCE(SUM(total), 0) AS value
-    FROM orders
-    WHERE created_at >= ${from}
-      AND status NOT IN ('CANCELLED', 'REFUNDED')
-    GROUP BY DATE(created_at)
-    ORDER BY day ASC
-  `);
-
-  const byDay = new Map<string, { orders: number; value: number }>();
-  for (const row of rows) {
-    byDay.set(row.day.toISOString().slice(0, 10), {
-      orders: Number(row.orders),
-      value: Number(row.value),
-    });
-  }
-
-  const series: Array<{ day: string; orders: number; value: number }> = [];
-  for (let offset = 0; offset < clamped; offset += 1) {
-    const day = new Date(from.getTime() + offset * 86_400_000).toISOString().slice(0, 10);
-    const entry = byDay.get(day);
-    series.push({ day, orders: entry?.orders ?? 0, value: entry?.value ?? 0 });
-  }
-
-  return { currency, series };
+export interface SalesSeriesPoint {
+  bucket: string;
+  revenue: number;
+  orders: number;
 }
 
-/** Best sellers over a period, for the dashboard. */
-export async function getTopProducts(limit: number, days = 30) {
-  const from = new Date(Date.now() - days * 86_400_000);
-  const safeLimit = Math.min(Math.max(limit, 1), 25);
+/** Revenue bucketed by day for the last `days` days, oldest first. */
+export async function getSalesSeries(days = 30): Promise<SalesSeriesPoint[]> {
+  const rows = await db.query<{ bucket: string; revenue: number | null; orders: number }>(
+    `SELECT DATE_FORMAT(created_at, '%Y-%m-%d') AS bucket,
+            SUM(total) AS revenue, COUNT(*) AS orders
+       FROM orders
+      WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+        AND status NOT IN ('CANCELLED', 'REFUNDED')
+      GROUP BY bucket
+      ORDER BY bucket ASC`,
+    [days],
+  );
+  return rows.map((row) => ({
+    bucket: row.bucket,
+    revenue: Number(row.revenue ?? 0),
+    orders: Number(row.orders),
+  }));
+}
 
-  // Read product identity from the snapshot on the order line, not from the
-  // live product row, so a renamed or deleted product still appears correctly.
-  const rows = await prisma.$queryRaw<
-    Array<{ productId: number | null; name: string; sku: string; unitsSold: number; value: number }>
-  >(Prisma.sql`
-    SELECT oi.product_id AS productId,
-           oi.product_name AS name,
-           oi.sku AS sku,
-           SUM(oi.quantity) AS unitsSold,
-           SUM(oi.line_total) AS value
-    FROM order_items oi
-    INNER JOIN orders o ON o.id = oi.order_id
-    WHERE o.created_at >= ${from}
-      AND o.status NOT IN ('CANCELLED', 'REFUNDED')
-    GROUP BY oi.product_id, oi.product_name, oi.sku
-    ORDER BY unitsSold DESC, value DESC
-    LIMIT ${safeLimit}
-  `);
-
+export async function getTopProducts(limit = 10, days = 30) {
+  const rows = await db.query<{ productId: number; productName: string; unitsSold: number; revenue: number }>(
+    `SELECT i.product_id AS productId, i.product_name AS productName,
+            SUM(i.quantity) AS unitsSold, SUM(i.line_total) AS revenue
+       FROM order_items i
+       JOIN orders o ON o.id = i.order_id
+      WHERE o.status NOT IN ('CANCELLED', 'REFUNDED')
+        AND o.created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+      GROUP BY i.product_id, i.product_name
+      ORDER BY unitsSold DESC
+      LIMIT ?`,
+    [days, limit],
+  );
   return rows.map((row) => ({
     productId: row.productId,
-    name: row.name,
-    sku: row.sku,
+    productName: row.productName,
     unitsSold: Number(row.unitsSold),
-    value: Number(row.value),
+    revenue: Number(row.revenue),
   }));
 }

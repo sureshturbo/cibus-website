@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { toMinor } from "@cibus/shared";
+import { paginate, toMinor } from "@cibus/shared";
 import {
   adminPaginationSchema,
   activeToggleSchema,
@@ -38,8 +38,9 @@ import {
   updateProduct,
 } from "../services/product.service.js";
 import { adjustStock, listStockMovements, findLowStockProducts } from "../services/stock.service.js";
-import { createOffer, deriveOfferStatus, getOfferById, listOffers, setOfferActive } from "../services/offer.service.js";
+import { createOffer, getOfferById, listOffers, setOfferActive, updateOffer } from "../services/offer.service.js";
 import { getCustomerById, listCustomers, setCustomerActive } from "../services/customer.service.js";
+import { countEnquiries, findEnquiryById, listEnquiryRows, updateEnquiry } from "../db/repositories/enquiry.repo.js";
 import {
   changeOrderStatus,
   getOrderById,
@@ -58,7 +59,6 @@ import {
 import { renderInvoiceHtml } from "../templates/invoice.js";
 import { storeProductImage, uploadImage } from "../lib/storage.js";
 import { uploadLimiter } from "../middleware/rateLimit.js";
-import { env } from "../config/env.js";
 import {
   categoryCreateSchema,
   categoryUpdateSchema,
@@ -90,7 +90,7 @@ adminRouter.use(requireAdmin);
 adminRouter.get(
   "/dashboard",
   controller(async (_req, res) => {
-    sendOk(res, await getDashboardSummary(env.CURRENCY));
+    sendOk(res, await getDashboardSummary());
   }),
 );
 
@@ -99,7 +99,7 @@ adminRouter.get(
   validate(salesSeriesQuerySchema, "query"),
   controller(async (req, res) => {
     const { days } = validatedQuery<z.infer<typeof salesSeriesQuerySchema>>(req);
-    sendOk(res, await getSalesSeries(days, env.CURRENCY));
+    sendOk(res, await getSalesSeries(days));
   }),
 );
 
@@ -429,24 +429,15 @@ adminRouter.patch(
       throw new ValidationError("End date must be after the start date");
     }
 
-    const { prisma } = await import("../lib/prisma.js");
-    const offer = await prisma.offer.update({
-      where: { id },
-      data: {
-        ...(body.name !== undefined ? { name: body.name } : {}),
-        ...(body.startsAt !== undefined ? { startsAt: body.startsAt } : {}),
-        ...(body.endsAt !== undefined ? { endsAt: body.endsAt } : {}),
-        ...(body.usageLimit !== undefined ? { usageLimit: body.usageLimit } : {}),
-        ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
-      },
-      include: {
-        category: { select: { id: true, name: true } },
-        product: { select: { id: true, name: true } },
-        _count: { select: { redemptions: true } },
-      },
+    const offer = await updateOffer(id, {
+      ...(body.name !== undefined ? { name: body.name } : {}),
+      ...(body.startsAt !== undefined ? { startsAt: body.startsAt } : {}),
+      ...(body.endsAt !== undefined ? { endsAt: body.endsAt } : {}),
+      ...(body.usageLimit !== undefined ? { usageLimit: body.usageLimit } : {}),
+      ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
     });
 
-    sendOk(res, { offer: { ...offer, derivedStatus: deriveOfferStatus(offer) } });
+    sendOk(res, { offer });
   }),
 );
 
@@ -625,18 +616,12 @@ adminRouter.get(
   validate(enquiryQuerySchema, "query"),
   controller(async (req, res) => {
     const query = validatedQuery<z.infer<typeof enquiryQuerySchema>>(req);
-    const { prisma } = await import("../lib/prisma.js");
-    const where = query.status === "all" ? {} : { status: query.status };
+    const status = query.status === "all" ? undefined : query.status;
+    const offset = (query.page - 1) * query.pageSize;
     const [total, rows] = await Promise.all([
-      prisma.partnerEnquiry.count({ where }),
-      prisma.partnerEnquiry.findMany({
-        where,
-        orderBy: [{ createdAt: "desc" }],
-        skip: (query.page - 1) * query.pageSize,
-        take: query.pageSize,
-      }),
+      countEnquiries(status),
+      listEnquiryRows(status, query.pageSize, offset),
     ]);
-    const { paginate } = await import("@cibus/shared");
     sendOk(res, paginate(rows, total, query.page, query.pageSize));
   }),
 );
@@ -647,16 +632,13 @@ adminRouter.patch(
   validate(enquiryNotesSchema),
   controller(async (req, res) => {
     const body = req.body as z.infer<typeof enquiryNotesSchema>;
-    const { prisma } = await import("../lib/prisma.js");
-    const existing = await prisma.partnerEnquiry.findUnique({ where: { id: param(req, "id") }, select: { id: true } });
+    const id = param(req, "id");
+    const existing = await findEnquiryById(id);
     if (!existing) throw new NotFoundError("Enquiry");
 
-    const enquiry = await prisma.partnerEnquiry.update({
-      where: { id: param(req, "id") },
-      data: {
-        ...(body.status !== undefined ? { status: body.status } : {}),
-        ...(body.notes !== undefined ? { notes: body.notes } : {}),
-      },
+    const enquiry = await updateEnquiry(id, {
+      ...(body.status !== undefined ? { status: body.status } : {}),
+      ...(body.notes !== undefined ? { notes: body.notes } : {}),
     });
     sendOk(res, { enquiry });
   }),

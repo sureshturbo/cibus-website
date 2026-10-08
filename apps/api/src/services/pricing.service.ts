@@ -1,22 +1,17 @@
-import {
-  evaluateOffers,
-  multiplyMinor,
-  type AppliedOffer,
-  type OfferEvaluation,
-  type PricedLine,
-} from "@cibus/shared";
-import { prisma } from "../lib/prisma.js";
+import { multiplyMinor } from "@cibus/shared";
+import type { AppliedOffer, OfferEvaluation, PricedLine } from "@cibus/shared";
+import { evaluateOffers } from "@cibus/shared";
+import type { Tx } from "../db/pool.js";
+import { findProductsByIds } from "../db/repositories/catalog.repo.js";
 import { findOfferByCode, loadCandidateOffers } from "./offer.service.js";
 
 /**
- * Pricing.
+ * Pricing service.
  *
- * One module owns the rule that the server decides what an order costs. The
- * cart preview, the checkout summary and the order itself all call through here,
- * so the figure a customer is shown and the figure that gets stored come from
- * identical arithmetic.
- *
- * No price ever arrives from the client. Only product ids and quantities do.
+ * The single place that turns requested product ids and quantities into money.
+ * Both the storefront preview and the stored order route through here, so the
+ * two can never disagree about what an order costs. No price or discount figure
+ * from a client is ever trusted.
  */
 
 export interface RequestedLine {
@@ -58,7 +53,7 @@ export interface PriceOptions {
    * Passed when pricing inside the checkout transaction, so the caller sees a
    * consistent snapshot of catalogue and offers.
    */
-  tx?: Parameters<typeof loadCandidateOffers>[2] extends never ? never : typeof prisma;
+  tx?: Tx;
 }
 
 /**
@@ -73,26 +68,11 @@ export async function priceRequestedLines(
   options: PriceOptions = {},
 ): Promise<PricingResult> {
   const now = options.now ?? new Date();
-  const client = options.tx ?? prisma;
+  const tx = options.tx;
 
   const productIds = [...new Set(requested.map((line) => line.productId))];
 
-  const products = await client.product.findMany({
-    where: { id: { in: productIds } },
-    select: {
-      id: true,
-      categoryId: true,
-      name: true,
-      slug: true,
-      sku: true,
-      unitLabel: true,
-      price: true,
-      stockQuantity: true,
-      allowBackorder: true,
-      isActive: true,
-      deletedAt: true,
-    },
-  });
+  const products = await findProductsByIds(productIds, tx);
 
   const byId = new Map(products.map((product) => [product.id, product]));
   const missing = productIds.filter((id) => !byId.get(id) || byId.get(id)!.deletedAt !== null);
@@ -135,12 +115,12 @@ export async function priceRequestedLines(
   });
 
   const categoryIds = [...new Set(products.map((product) => product.categoryId))];
-  const candidates = await loadCandidateOffers(productIds, categoryIds, now);
+  const candidates = await loadCandidateOffers(productIds, categoryIds, now, tx);
 
   let selected = null;
   let resolvedCode: string | null = null;
   if (options.offerCode) {
-    const found = await findOfferByCode(options.offerCode);
+    const found = await findOfferByCode(options.offerCode, tx);
     resolvedCode = options.offerCode;
     if (found) {
       selected = found;

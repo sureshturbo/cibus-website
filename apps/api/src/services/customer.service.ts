@@ -1,7 +1,12 @@
-import { Prisma } from "@prisma/client";
-import { paginate, type Paginated } from "@cibus/shared";
+import { paginate } from "@cibus/shared";
 import { NotFoundError } from "../lib/errors.js";
-import { prisma } from "../lib/prisma.js";
+import {
+  countCustomerRows,
+  findCustomerById,
+  listCustomerRows,
+  updateCustomer,
+} from "../db/repositories/auth.repo.js";
+import { revokeSessionsForCustomer } from "../db/repositories/auth.repo.js";
 
 /**
  * Customer management for the admin panel.
@@ -18,104 +23,61 @@ export interface ListCustomersQuery {
   status?: "all" | "active" | "inactive";
 }
 
-export async function listCustomers(query: ListCustomersQuery): Promise<Paginated<unknown>> {
-  const where: Prisma.CustomerWhereInput = {};
+export async function listCustomers(query: ListCustomersQuery) {
+  const where: string[] = [];
+  const params: unknown[] = [];
 
-  if (query.status === "active") where.isActive = true;
-  if (query.status === "inactive") where.isActive = false;
+  if (query.status === "active") where.push("c.is_active = 1");
+  if (query.status === "inactive") where.push("c.is_active = 0");
 
   if (query.search) {
     const term = query.search.replace(/[\\%_]/g, (c) => `\\${c}`);
-    where.OR = [
-      { email: { contains: term } },
-      { fullName: { contains: term } },
-      { phone: { contains: term } },
-    ];
+    where.push("(c.email LIKE ? OR c.full_name LIKE ? OR c.phone LIKE ?)");
+    params.push(`%${term}%`, `%${term}%`, `%${term}%`);
   }
 
+  const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+  const offset = (query.page - 1) * query.pageSize;
+
   const [total, rows] = await Promise.all([
-    prisma.customer.count({ where }),
-    prisma.customer.findMany({
-      where,
-      orderBy: [{ createdAt: "desc" }],
-      skip: (query.page - 1) * query.pageSize,
-      take: query.pageSize,
-      select: {
-        id: true,
-        email: true,
-        fullName: true,
-        phone: true,
-        isActive: true,
-        createdAt: true,
-        _count: { select: { orders: true, addresses: true } },
-        orders: {
-          orderBy: { createdAt: "desc" },
-          take: 1,
-          select: { total: true, status: true, createdAt: true },
-        },
-      },
-    }),
+    countCustomerRows(whereSql, params),
+    listCustomerRows(whereSql, params, query.pageSize, offset),
   ]);
 
-  const items = rows.map((row) => {
-    const latestOrder = row.orders[0] ?? null;
-    return {
-      id: row.id,
-      email: row.email,
-      fullName: row.fullName,
-      phone: row.phone,
-      isActive: row.isActive,
-      createdAt: row.createdAt,
-      orderCount: row._count.orders,
-      addressCount: row._count.addresses,
-      lastOrderTotal: latestOrder?.total ?? null,
-      lastOrderStatus: latestOrder?.status ?? null,
-      lastOrderAt: latestOrder?.createdAt ?? null,
-    };
-  });
+  const items = rows.map((row) => ({
+    id: row.id,
+    email: row.email,
+    fullName: row.fullName,
+    phone: row.phone,
+    isActive: row.isActive,
+    createdAt: row.createdAt,
+    orderCount: Number(row.orderCount),
+    addressCount: Number(row.addressCount),
+    lastOrderTotal: row.lastOrderTotal,
+    lastOrderStatus: row.lastOrderStatus,
+    lastOrderAt: row.lastOrderAt,
+  }));
 
   return paginate(items, total, query.page, query.pageSize);
 }
 
 export async function getCustomerById(id: number) {
-  const customer = await prisma.customer.findUnique({
-    where: { id },
-    select: {
-      id: true,
-      email: true,
-      fullName: true,
-      phone: true,
-      isActive: true,
-      emailVerifiedAt: true,
-      createdAt: true,
-      addresses: { orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }] },
-      orders: {
-        orderBy: { createdAt: "desc" },
-        select: {
-          id: true,
-          orderNumber: true,
-          status: true,
-          total: true,
-          _count: { select: { items: true } },
-          createdAt: true,
-        },
-      },
-      _count: { select: { orders: true } },
-    },
-  });
-
+  const rows = await listCustomerRows("WHERE c.id = ?", [id], 1, 0);
+  const customer = rows[0];
   if (!customer) throw new NotFoundError("Customer");
 
   return {
-    ...customer,
-    orderCount: customer._count.orders,
-    lifetimeValue: customer.orders
-      .filter((order) => order.status !== "CANCELLED" && order.status !== "REFUNDED")
-      .reduce((sum, order) => sum + order.total, 0),
-    orders: customer.orders.map(({ _count, ...order }) => ({
-      ...order,
-      itemCount: _count.items,
-    })),
+    id: customer.id,
+    email: customer.email,
+    fullName: customer.fullName,
+    phone: customer.phone,
+    isActive: customer.isActive,
+    createdAt: customer.createdAt,
+    orderCount: Number(customer.orderCount),
+    addressCount: Number(customer.addressCount),
+    lastOrderTotal: customer.lastOrderTotal,
+    lastOrderStatus: customer.lastOrderStatus,
+    lastOrderAt: customer.lastOrderAt,
   };
 }
 
@@ -124,25 +86,15 @@ export async function getCustomerById(id: number) {
  * the row would orphan history that invoices still depend on.
  */
 export async function setCustomerActive(id: number, isActive: boolean) {
-  const existing = await prisma.customer.findUnique({
-    where: { id },
-    select: { id: true },
-  });
+  const existing = await findCustomerById(id);
   if (!existing) throw new NotFoundError("Customer");
 
-  const customer = await prisma.customer.update({
-    where: { id },
-    data: { isActive },
-    select: { id: true, email: true, fullName: true, isActive: true },
-  });
+  const customer = await updateCustomer(id, { isActive });
 
   // Revoke sessions immediately rather than waiting for token expiry.
   if (!isActive) {
-    await prisma.refreshSession.updateMany({
-      where: { customerId: id, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
+    await revokeSessionsForCustomer(id);
   }
 
-  return customer;
+  return { id: customer.id, email: customer.email, fullName: customer.fullName, isActive: customer.isActive };
 }

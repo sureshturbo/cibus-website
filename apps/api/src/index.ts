@@ -2,7 +2,7 @@ import { createApp, prepare } from "./app.js";
 import { env } from "./config/env.js";
 import { setLogLevel } from "./lib/logger.js";
 import { installProcessGuards } from "./middleware/common.js";
-import { disconnectDatabase } from "./lib/prisma.js";
+import { disconnectDatabase } from "./db/pool.js";
 
 /**
  * Process entry point.

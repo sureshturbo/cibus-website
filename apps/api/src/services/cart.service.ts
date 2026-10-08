@@ -1,13 +1,26 @@
 import crypto from "node:crypto";
-import type { Prisma, PrismaClient } from "@prisma/client";
 import { multiplyMinor } from "@cibus/shared";
 import { NotFoundError, ValidationError } from "../lib/errors.js";
-import { prisma } from "../lib/prisma.js";
+import { db, transaction, type Tx } from "../db/pool.js";
+import { findActiveProductStock } from "../db/repositories/catalog.repo.js";
+import {
+  countCartItems,
+  deleteCart,
+  deleteCartItem,
+  deleteCartItems,
+  findCartById,
+  findCartByCustomerId,
+  findCartByToken,
+  findCartItem,
+  firstImagesForProductIds,
+  insertCart,
+  listCartItemRows,
+  listCartLineRows,
+  upsertCartItem,
+  updateCartItemQuantity,
+} from "../db/repositories/cart.repo.js";
 import { priceCartItems } from "./pricing.service.js";
 import { isPurchasable } from "./selects.js";
-
-/** Either the root client or an interactive transaction, which share a shape. */
-type DbClient = PrismaClient | Prisma.TransactionClient;
 
 /**
  * Cart service.
@@ -29,27 +42,18 @@ export interface CartToken {
 
 export async function resolveCart(
   identity: { customerId?: number; guestToken?: string },
-  tx: DbClient = prisma,
+  tx: Tx = db,
 ): Promise<CartToken> {
   if (identity.customerId) {
-    const existing = await tx.cart.findFirst({
-      where: { customerId: identity.customerId },
-      select: { id: true },
-    });
+    const existing = await findCartByCustomerId(identity.customerId, tx);
     if (existing) return { cartId: existing.id };
 
-    const created = await tx.cart.create({
-      data: { customerId: identity.customerId },
-      select: { id: true },
-    });
+    const created = await insertCart({ customerId: identity.customerId, token: null, expiresAt: null }, tx);
     return { cartId: created.id };
   }
 
   if (identity.guestToken) {
-    const existing = await tx.cart.findUnique({
-      where: { token: identity.guestToken },
-      select: { id: true, expiresAt: true },
-    });
+    const existing = await findCartByToken(identity.guestToken, tx);
     if (existing && existing.expiresAt && existing.expiresAt > new Date()) {
       return { cartId: existing.id, token: identity.guestToken };
     }
@@ -57,37 +61,34 @@ export async function resolveCart(
 
   const token = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + GUEST_CART_TTL_DAYS * 86_400_000);
-  const created = await tx.cart.create({
-    data: { token, expiresAt },
-    select: { id: true },
-  });
+  const created = await insertCart({ customerId: null, token, expiresAt }, tx);
   return { cartId: created.id, token };
 }
 
 /** Fold a guest cart into the customer's cart on sign-in, then drop the guest row. */
 export async function mergeGuestCart(guestToken: string, customerId: number): Promise<void> {
-  const guest = await prisma.cart.findUnique({
-    where: { token: guestToken },
-    include: { items: true },
-  });
+  const guest = await findCartByToken(guestToken);
   if (!guest) return;
+  const guestItems = await listCartItemRows(guest.id);
 
-  await prisma.$transaction(async (tx) => {
-    if (guest.items.length > 0) {
+  await transaction(async (tx) => {
+    if (guestItems.length > 0) {
       const customerCart = await resolveCart({ customerId }, tx);
 
-      for (const item of guest.items) {
-        await tx.cartItem.upsert({
-          where: { cartId_productId: { cartId: customerCart.cartId, productId: item.productId } },
-          create: { cartId: customerCart.cartId, productId: item.productId, quantity: item.quantity },
+      for (const item of guestItems) {
+        await upsertCartItem(
+          customerCart.cartId,
+          item.productId,
+          item.quantity,
           // Take the larger quantity rather than summing: a guest who added 2
           // and an account holder who already had 2 should end up with 2.
-          update: { quantity: Math.min(Math.max(item.quantity, 1), MAX_QUANTITY_PER_LINE) },
-        });
+          Math.min(Math.max(item.quantity, 1), MAX_QUANTITY_PER_LINE),
+          tx,
+        );
       }
     }
 
-    await tx.cart.delete({ where: { id: guest.id } });
+    await deleteCart(guest.id, tx);
   });
 }
 
@@ -120,44 +121,16 @@ export interface CartView {
 }
 
 export async function getCart(cartId: number): Promise<CartView> {
-  const cart = await prisma.cart.findUnique({
-    where: { id: cartId },
-    include: {
-      items: {
-        orderBy: { createdAt: "asc" },
-        include: {
-          product: {
-            select: {
-              id: true,
-              name: true,
-              slug: true,
-              sku: true,
-              unitLabel: true,
-              price: true,
-              compareAtPrice: true,
-              stockQuantity: true,
-              allowBackorder: true,
-              isActive: true,
-              deletedAt: true,
-              category: { select: { name: true, slug: true } },
-              images: {
-                select: { url: true, altText: true, isPrimary: true, sortOrder: true },
-                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-              },
-            },
-          },
-        },
-      },
-    },
-  });
-
+  const cart = await findCartById(cartId);
   if (!cart) return emptyCart();
 
-  const items: CartLineView[] = cart.items.map((item) => {
-    const product = item.product;
+  const rows = await listCartLineRows(cartId);
+  const images = await firstImagesForProductIds(rows.map((row) => row.productId));
+
+  const items: CartLineView[] = rows.map((product) => {
     const gone = product.deletedAt !== null || !product.isActive;
     const purchasable = !gone && isPurchasable(product);
-    const overStock = purchasable && !product.allowBackorder && item.quantity > product.stockQuantity;
+    const overStock = purchasable && !product.allowBackorder && product.quantity > product.stockQuantity;
 
     let issue: string | null = null;
     if (gone) issue = "This product is no longer available and has been removed from pricing.";
@@ -169,24 +142,23 @@ export async function getCart(cartId: number): Promise<CartView> {
     }
 
     const price = gone ? 0 : product.price;
+    const image = images.get(product.productId);
 
     return {
-      productId: product.id,
+      productId: product.productId,
       name: product.name,
       slug: product.slug,
       sku: product.sku,
       unitLabel: product.unitLabel,
       unitPrice: price,
       compareAtPrice: gone ? null : product.compareAtPrice,
-      lineTotal: multiplyMinor(price, item.quantity),
-      quantity: item.quantity,
+      lineTotal: multiplyMinor(price, product.quantity),
+      quantity: product.quantity,
       stockQuantity: product.stockQuantity,
       purchasable,
       issue,
-      image: product.images[0]
-        ? { url: product.images[0].url, altText: product.images[0].altText || product.name }
-        : null,
-      category: product.category,
+      image: image ? { url: image.url, altText: image.altText || product.name } : null,
+      category: product.categoryName ? { name: product.categoryName, slug: product.categorySlug! } : null,
     };
   });
 
@@ -229,24 +201,16 @@ export async function addToCart(
   productId: number,
   quantity: number,
 ): Promise<CartView> {
-  const product = await prisma.product.findFirst({
-    where: { id: productId, isActive: true, deletedAt: null },
-    select: { id: true, stockQuantity: true, allowBackorder: true },
-  });
+  const product = await findActiveProductStock(productId);
   if (!product) throw new NotFoundError("Product");
 
-  const cart = await prisma.cart.findUnique({
-    where: { id: cartId },
-    select: { id: true, _count: { select: { items: true } } },
-  });
+  const cart = await findCartById(cartId);
   if (!cart) throw new NotFoundError("Cart");
+  const itemCount = await countCartItems(cartId);
 
-  const existing = await prisma.cartItem.findUnique({
-    where: { cartId_productId: { cartId, productId } },
-    select: { id: true, quantity: true },
-  });
+  const existing = await findCartItem(cartId, productId);
 
-  if (!existing && cart._count.items >= MAX_LINES) {
+  if (!existing && itemCount >= MAX_LINES) {
     throw new ValidationError(`A cart can hold at most ${MAX_LINES} different products`);
   }
 
@@ -266,26 +230,16 @@ export async function addToCart(
     );
   }
 
-  await prisma.cartItem.upsert({
-    where: { cartId_productId: { cartId, productId } },
-    create: { cartId, productId, quantity },
-    update: { quantity: requested },
-  });
+  await upsertCartItem(cartId, productId, quantity, requested);
 
   return getCart(cartId);
 }
 
 export async function updateCartQuantity(cartId: number, productId: number, quantity: number) {
-  const item = await prisma.cartItem.findUnique({
-    where: { cartId_productId: { cartId, productId } },
-    select: { id: true },
-  });
+  const item = await findCartItem(cartId, productId);
   if (!item) throw new NotFoundError("Cart item");
 
-  const product = await prisma.product.findFirst({
-    where: { id: productId, isActive: true, deletedAt: null },
-    select: { stockQuantity: true, allowBackorder: true },
-  });
+  const product = await findActiveProductStock(productId);
   if (!product) throw new NotFoundError("Product");
 
   if (!product.allowBackorder && quantity > product.stockQuantity) {
@@ -296,17 +250,17 @@ export async function updateCartQuantity(cartId: number, productId: number, quan
     );
   }
 
-  await prisma.cartItem.update({ where: { id: item.id }, data: { quantity } });
+  await updateCartItemQuantity(item.id, quantity);
   return getCart(cartId);
 }
 
 export async function removeFromCart(cartId: number, productId: number) {
-  await prisma.cartItem.deleteMany({ where: { cartId, productId } });
+  await deleteCartItem(cartId, productId);
   return getCart(cartId);
 }
 
 export async function clearCart(cartId: number) {
-  await prisma.cartItem.deleteMany({ where: { cartId } });
+  await deleteCartItems(cartId);
   return getCart(cartId);
 }
 

@@ -1,13 +1,9 @@
-import { Prisma } from "@prisma/client";
 import {
   ORDER_STATUS_TRANSITIONS,
   STOCK_CONSUMING_STATUSES,
   canTransitionOrder,
-  evaluateOffers,
-  multiplyMinor,
   paginate,
   type OrderStatus,
-  type PricingLine,
 } from "@cibus/shared";
 import { env } from "../config/env.js";
 import {
@@ -16,8 +12,32 @@ import {
   NotFoundError,
   ValidationError,
 } from "../lib/errors.js";
-import { prisma } from "../lib/prisma.js";
+import { transaction, type Tx } from "../db/pool.js";
+import { deleteCartItems, findCartByCustomerId, listCartItemRows } from "../db/repositories/cart.repo.js";
+import { findProductsByIds, insertStockMovement } from "../db/repositories/catalog.repo.js";
+import {
+  attachOrderStockMovements,
+  countOrders,
+  findIdempotencyKey,
+  findInvoicesForOrder,
+  findOrderById as findOrderRow,
+  findOrderForStatusChange,
+  insertIdempotencyKey,
+  insertInvoice,
+  insertOrder,
+  insertOrderItems,
+  insertOrderStatusHistory,
+  listOrderItems,
+  listOrderRows,
+  listOrderStatusHistory,
+  markIdempotencyCompleted,
+  releaseIdempotencyKey as releaseIdempotencyKeyRow,
+  updateOrderStatus,
+  voidInvoicesForOrder,
+} from "../db/repositories/orders.repo.js";
+import { claimStock, decrementStock, readStockQuantity } from "../db/repositories/stock.repo.js";
 import { recordRedemptions, releaseRedemptions } from "./offer.service.js";
+import { priceRequestedLines } from "./pricing.service.js";
 import { applyStockMovement, nextInvoiceNumber, nextOrderNumber } from "./stock.service.js";
 
 /**
@@ -31,8 +51,6 @@ import { applyStockMovement, nextInvoiceNumber, nextOrderNumber } from "./stock.
  * tax column. What is left is the structural half, which must be correct before
  * either can be added.
  */
-
-type Tx = Prisma.TransactionClient;
 
 /**
  * Stock is claimed at order placement, not at cart-add time, and the transition
@@ -115,31 +133,26 @@ export async function placeOrder(command: CheckoutCommand): Promise<CheckoutResu
 }
 
 async function replayIfAlreadyPlaced(key: string): Promise<CheckoutResult | null> {
-  const record = await prisma.idempotencyKey.findUnique({
-    where: { key },
-    include: {
-      order: {
-        include: {
-          items: { select: { productName: true, quantity: true, lineTotal: true } },
-          invoices: { orderBy: { id: "asc" }, take: 1, select: { invoiceNumber: true } },
-        },
-      },
-    },
-  });
+  const record = await findIdempotencyKey(key);
+  if (!record?.orderId) return null;
 
-  if (!record?.order) return null;
+  const order = await findOrderRow(record.orderId, undefined);
+  if (!order) return null;
+
+  const items = await listOrderItems(order.id);
+  const invoices = await findInvoicesForOrder(order.id, 1);
 
   return {
-    orderId: record.order.id,
-    orderNumber: record.order.orderNumber,
-    invoiceNumber: record.order.invoices[0]?.invoiceNumber ?? "",
-    subtotal: record.order.subtotal,
-    discountTotal: record.order.discountTotal,
-    total: record.order.total,
+    orderId: order.id,
+    orderNumber: order.orderNumber,
+    invoiceNumber: invoices[0]?.invoiceNumber ?? "",
+    subtotal: order.subtotal,
+    discountTotal: order.discountTotal,
+    total: order.total,
     stockCommitted: true,
     paymentRequired: false,
     notice: "This order was already placed. No duplicate was created.",
-    items: record.order.items.map((item) => ({
+    items: items.map((item) => ({
       name: item.productName,
       quantity: item.quantity,
       lineTotal: item.lineTotal,
@@ -158,9 +171,7 @@ async function awaitExistingOrder(key: string): Promise<CheckoutResult | null> {
 
 async function claimIdempotencyKey(key: string): Promise<boolean> {
   try {
-    await prisma.idempotencyKey.create({
-      data: { key, scope: "checkout", status: "IN_PROGRESS" },
-    });
+    await insertIdempotencyKey(key, "checkout");
     return true;
   } catch {
     return false;
@@ -168,394 +179,291 @@ async function claimIdempotencyKey(key: string): Promise<boolean> {
 }
 
 async function releaseIdempotencyKey(key: string): Promise<void> {
-  await prisma.idempotencyKey.deleteMany({ where: { key, orderId: null } });
+  await releaseIdempotencyKeyRow(key);
 }
 
 async function loadCustomerCart(customerId?: number) {
   if (!customerId) return null;
-  return prisma.cart.findFirst({
-    where: { customerId },
-    select: { id: true, items: { select: { productId: true, quantity: true } } },
-  });
+  const cart = await findCartByCustomerId(customerId);
+  if (!cart) return null;
+  return { id: cart.id, items: await listCartItemRows(cart.id) };
 }
 
 async function runCheckoutTransaction(
   command: CheckoutCommand,
   cart: { id: number; items: Array<{ productId: number; quantity: number }> },
 ): Promise<CheckoutResult> {
-  return prisma.$transaction(
-    async (tx) => {
-      const now = new Date();
+  return transaction(async (tx) => {
+    const now = new Date();
 
-      /* --- 1. re-read the catalogue inside the transaction ---------------- */
-      const productIds = cart.items.map((item) => item.productId);
-      const products = await tx.product.findMany({
-        where: { id: { in: productIds } },
-        select: {
-          id: true,
-          categoryId: true,
-          name: true,
-          slug: true,
-          sku: true,
-          unitLabel: true,
-          price: true,
-          stockQuantity: true,
-          allowBackorder: true,
-          isActive: true,
-          deletedAt: true,
-        },
+    /* --- 1. re-read the catalogue inside the transaction ---------------- */
+    const productIds = cart.items.map((item) => item.productId);
+    const products = await findProductsByIds(productIds, tx);
+    const byId = new Map(products.map((product) => [product.id, product]));
+
+    const gone = products
+      .filter((product) => product.deletedAt !== null || !product.isActive)
+      .map((product) => product.name);
+    const missing = productIds.filter((id) => !byId.has(id));
+
+    if (gone.length > 0 || missing.length > 0) {
+      throw new ValidationError("Some items are no longer available. Review your cart and try again.", {
+        unavailable: gone,
+        missing,
       });
-      const byId = new Map(products.map((product) => [product.id, product]));
+    }
 
-      const gone = products
-        .filter((product) => product.deletedAt !== null || !product.isActive)
-        .map((product) => product.name);
-      const missing = productIds.filter((id) => !byId.has(id));
+    /* --- 2. price through the shared pricing service -------------------- */
+    const pricing = await priceRequestedLines(
+      cart.items.map((item) => ({ productId: item.productId, quantity: item.quantity })),
+      { offerCode: command.offerCode ?? null, now, tx },
+    );
 
-      if (gone.length > 0 || missing.length > 0) {
-        throw new ValidationError("Some items are no longer available. Review your cart and try again.", {
-          unavailable: gone,
-          missing,
-        });
-      }
+    const extended = pricing as typeof pricing & {
+      unavailableProductIds?: number[];
+      invalidOfferCode?: string;
+    };
+    if (extended.invalidOfferCode) {
+      throw new ValidationError(`Offer code "${extended.invalidOfferCode}" is not recognised`, {
+        offerCode: extended.invalidOfferCode,
+      });
+    }
+    if (extended.unavailableProductIds?.length) {
+      throw new ValidationError("Some items are no longer available. Review your cart and try again.");
+    }
 
-      /* --- 2. load offers through this transaction ------------------------ */
-      const pricing = await priceWithinTransaction(tx, cart.items, command.offerCode ?? null, now);
+    /* --- 3. claim stock atomically ---------------------------------------
+     * A conditional UPDATE per line takes the stock. Two customers checking
+     * out the last unit both read quantity 1, but only one UPDATE satisfies
+     * `stock_quantity >= requested`, so only one proceeds and the loser's
+     * whole transaction rolls back.
+     */
+    for (const item of cart.items) {
+      const product = byId.get(item.productId)!;
 
-      /* --- 3. claim stock atomically ---------------------------------------
-       * A conditional UPDATE per line takes the stock. Two customers checking
-       * out the last unit both read quantity 1, but only one UPDATE satisfies
-       * `stock_quantity >= requested`, so only one proceeds and the loser's
-       * whole transaction rolls back.
-       */
-      for (const item of cart.items) {
-        const product = byId.get(item.productId)!;
-
-        if (product.allowBackorder) {
-          const updated = await tx.product.update({
-            where: { id: product.id },
-            data: { stockQuantity: { decrement: item.quantity } },
-            select: { stockQuantity: true },
-          });
-          await tx.stockMovement.create({
-            data: {
-              productId: product.id,
-              type: "SALE",
-              quantityChange: -item.quantity,
-              balanceAfter: updated.stockQuantity,
-              referenceType: "ORDER",
-              note: "Backorder sale",
-            },
-          });
-          continue;
-        }
-
-        const claimed = await tx.product.updateMany({
-          where: { id: product.id, stockQuantity: { gte: item.quantity } },
-          data: { stockQuantity: { decrement: item.quantity } },
-        });
-
-        if (claimed.count === 0) {
-          throw new InsufficientStockError(
-            product.stockQuantity > 0
-              ? `"${product.name}" sold out while you were checking out. Only ${product.stockQuantity} remained.`
-              : `"${product.name}" is out of stock.`,
-            [
-              {
-                productId: product.id,
-                name: product.name,
-                requested: item.quantity,
-                available: product.stockQuantity,
-              },
-            ],
-          );
-        }
-
-        const refreshed = await tx.product.findUniqueOrThrow({
-          where: { id: product.id },
-          select: { stockQuantity: true },
-        });
-
-        await tx.stockMovement.create({
-          data: {
+      if (product.allowBackorder) {
+        await decrementStock(product.id, item.quantity, tx);
+        const balanceAfter = (await readStockQuantity(product.id, tx)) ?? 0;
+        await insertStockMovement(
+          {
             productId: product.id,
             type: "SALE",
             quantityChange: -item.quantity,
-            balanceAfter: refreshed.stockQuantity,
+            balanceAfter,
             referenceType: "ORDER",
-            note: "Order placed",
+            note: "Backorder sale",
+            createdById: null,
           },
-        });
+          tx,
+        );
+        continue;
       }
 
-      /* --- 4. allocate numbers and write the order ------------------------- */
-      const orderNumber = await nextOrderNumber(tx, now);
-
-      const order = await tx.order.create({
-        data: {
-          orderNumber,
-          customerId: command.customerId ?? null,
-          status: "PENDING",
-          fulfilmentMethod: command.fulfilmentMethod,
-          customerName: command.fullName,
-          customerEmail: command.email,
-          customerPhone: command.phone,
-          addressLine1: command.address.line1,
-          addressLine2: command.address.line2 || null,
-          addressCity: command.address.city,
-          addressState: command.address.state,
-          addressPostalCode: command.address.postalCode,
-          addressLandmark: command.address.landmark || null,
-          subtotal: pricing.subtotal,
-          discountTotal: pricing.discountTotal,
-          total: pricing.total,
-          deliveryNotes: command.deliveryNotes ?? "",
-          items: {
-            create: pricing.lines.map((line) => ({
-              productId: line.productId,
-              productName: line.name,
-              productSlug: line.slug,
-              sku: line.sku,
-              unitLabel: line.unitLabel,
-              unitPrice: line.unitPrice,
-              quantity: line.quantity,
-              lineDiscount: line.lineDiscount,
-              lineTotal: line.lineTotal,
-              offerId: line.offerId,
-              offerName: line.offerName,
-            })),
-          },
-          statusHistory: {
-            create: {
-              toStatus: "PENDING",
-              changedBy: command.customerId ? `customer:${command.customerId}` : "guest",
-              note: "Order placed",
+      const claimed = await claimStock(product.id, item.quantity, tx);
+      if (claimed === 0) {
+        throw new InsufficientStockError(
+          product.stockQuantity > 0
+            ? `"${product.name}" sold out while you were checking out. Only ${product.stockQuantity} remained.`
+            : `"${product.name}" is out of stock.`,
+          [
+            {
+              productId: product.id,
+              name: product.name,
+              requested: item.quantity,
+              available: product.stockQuantity,
             },
-          },
-        },
-        select: { id: true, orderNumber: true },
-      });
+          ],
+        );
+      }
 
-      /* --- 5. attach the stock movements to the order ---------------------- */
-      await tx.stockMovement.updateMany({
-        where: {
-          productId: { in: productIds },
+      const balanceAfter = (await readStockQuantity(product.id, tx)) ?? 0;
+      await insertStockMovement(
+        {
+          productId: product.id,
           type: "SALE",
+          quantityChange: -item.quantity,
+          balanceAfter,
           referenceType: "ORDER",
-          referenceId: null,
+          note: "",
+          createdById: null,
         },
-        data: { referenceId: String(order.id) },
-      });
-
-      /* --- 6. record offer usage ------------------------------------------ */
-      await recordRedemptions(
         tx,
-        order.id,
-        pricing.appliedOffers.map((offer) => ({ offerId: offer.offerId, discount: offer.discount })),
       );
+    }
 
-      /* --- 7. issue the invoice from the order snapshot --------------------- */
-      const { invoiceNumber, financialYear } = await nextInvoiceNumber(tx, now);
-      await tx.invoice.create({
-        data: {
-          invoiceNumber,
-          financialYear,
-          orderId: order.id,
-          status: "ISSUED",
-          issuerName: env.COMPANY_NAME,
-          issuerAddress: env.COMPANY_ADDRESS,
-          issuerEmail: env.COMPANY_EMAIL,
-          issuerPhone: env.COMPANY_PHONE,
-          subtotal: pricing.subtotal,
-          discountTotal: pricing.discountTotal,
-          total: pricing.total,
-        },
-      });
-
-      /* --- 8. empty the cart and close out the idempotency record ---------- */
-      await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
-
-      await tx.idempotencyKey.update({
-        where: { key: command.idempotencyKey },
-        data: { orderId: order.id, status: "COMPLETED", responseHash: order.orderNumber },
-      });
-
-      return {
-        orderId: order.id,
-        orderNumber: order.orderNumber,
-        invoiceNumber,
+    /* --- 4. write the order and its snapshot lines ---------------------- */
+    const orderNumber = await nextOrderNumber(tx, now);
+    const { id: orderId } = await insertOrder(
+      {
+        orderNumber,
+        customerId: command.customerId ?? null,
+        status: "PENDING",
+        fulfilmentMethod: command.fulfilmentMethod,
+        customerName: command.fullName,
+        customerEmail: command.email,
+        customerPhone: command.phone,
+        addressLine1: command.address.line1,
+        addressLine2: command.address.line2 ?? null,
+        addressCity: command.address.city,
+        addressState: command.address.state,
+        addressPostalCode: command.address.postalCode,
+        addressLandmark: command.address.landmark ?? null,
         subtotal: pricing.subtotal,
         discountTotal: pricing.discountTotal,
         total: pricing.total,
-        stockCommitted: true,
-        paymentRequired: false as const,
-        notice: PAYMENT_NOTICE,
-        items: pricing.lines.map((line) => ({
-          name: line.name,
-          quantity: line.quantity,
-          lineTotal: line.lineTotal,
-        })),
-      };
-    },
-    {
-      // Long enough for a slow catalogue read, short enough that a stalled
-      // transaction does not accumulate row locks.
-      timeout: 20_000,
-      maxWait: 5_000,
-    },
-  );
+        deliveryNotes: command.deliveryNotes ?? "",
+      },
+      tx,
+    );
+
+    await insertOrderItems(
+      orderId,
+      pricing.lines.map((line) => ({
+        productId: line.productId,
+        productName: line.name,
+        productSlug: line.slug,
+        sku: line.sku,
+        unitLabel: line.unitLabel,
+        unitPrice: line.unitPrice,
+        quantity: line.quantity,
+        lineDiscount: line.lineDiscount,
+        lineTotal: line.lineTotal,
+        offerId: line.offerId,
+        offerName: line.offerName,
+      })),
+      tx,
+    );
+
+    await insertOrderStatusHistory(
+      {
+        orderId,
+        fromStatus: null,
+        toStatus: "PENDING",
+        note: "Order placed",
+        changedBy: command.customerId ? `customer:${command.customerId}` : "guest",
+      },
+      tx,
+    );
+
+    /* --- 5. tie the SALE movements to the order ------------------------- */
+    await attachOrderStockMovements(productIds, orderId, tx);
+
+    /* --- 6. record offer redemptions ------------------------------------ */
+    await recordRedemptions(
+      tx,
+      orderId,
+      pricing.appliedOffers.map((offer) => ({ offerId: offer.offerId, discount: offer.discount })),
+    );
+
+    /* --- 7. issue the invoice ------------------------------------------- */
+    const { invoiceNumber, financialYear } = await nextInvoiceNumber(tx, now);
+    await insertInvoice(
+      {
+        invoiceNumber,
+        financialYear,
+        orderId,
+        issuerName: env.COMPANY_NAME,
+        issuerAddress: env.COMPANY_ADDRESS,
+        issuerEmail: env.COMPANY_EMAIL,
+        issuerPhone: env.COMPANY_PHONE,
+        subtotal: pricing.subtotal,
+        discountTotal: pricing.discountTotal,
+        total: pricing.total,
+      },
+      tx,
+    );
+
+    /* --- 8. empty the cart and close out the idempotency record ---------- */
+    await deleteCartItems(cart.id, tx);
+    await markIdempotencyCompleted(command.idempotencyKey, orderId, orderNumber, tx);
+
+    return {
+      orderId,
+      orderNumber,
+      invoiceNumber,
+      subtotal: pricing.subtotal,
+      discountTotal: pricing.discountTotal,
+      total: pricing.total,
+      stockCommitted: true,
+      paymentRequired: false,
+      notice: PAYMENT_NOTICE,
+      items: pricing.lines.map((line) => ({
+        name: line.name,
+        quantity: line.quantity,
+        lineTotal: line.lineTotal,
+      })),
+    };
+  });
 }
 
-/* ============================== order pricing ============================ */
+/* ================================= reads ================================= */
 
-interface TransactionPricing {
-  lines: Array<
-    PricingLine & {
-      name: string;
-      slug: string;
-      sku: string;
-      unitLabel: string;
-      lineDiscount: number;
-      lineTotal: number;
-      offerId: number | null;
-      offerName: string | null;
-    }
-  >;
+export interface OrderListView {
+  id: number;
+  orderNumber: string;
+  status: OrderStatus;
+  fulfilmentMethod: string;
+  customerName: string;
+  customerEmail: string;
+  customerPhone: string;
+  addressCity: string;
   subtotal: number;
   discountTotal: number;
   total: number;
-  appliedOffers: Array<{ offerId: number; offerName: string; code: string | null; discount: number }>;
-  rejections: Array<{ offerId: number; offerName: string; reason: string }>;
+  createdAt: Date;
+  itemCount: number;
 }
 
-/**
- * Price the cart using only what this transaction can see, so an offer
- * expiring or a price changing mid-checkout cannot produce a torn result.
- */
-async function priceWithinTransaction(
-  tx: Tx,
-  items: Array<{ productId: number; quantity: number }>,
-  offerCode: string | null,
-  now: Date,
-): Promise<TransactionPricing> {
-  const productIds = items.map((item) => item.productId);
-
-  const catalogue = await tx.product.findMany({
-    where: { id: { in: productIds } },
-    select: {
-      id: true,
-      categoryId: true,
-      name: true,
-      slug: true,
-      sku: true,
-      unitLabel: true,
-      price: true,
-    },
-  });
-  const byId = new Map(catalogue.map((row) => [row.id, row]));
-
-  const categoryIds = [...new Set(catalogue.map((row) => row.categoryId))];
-
-  const candidateRows = await tx.offer.findMany({
-    where: {
-      isActive: true,
-      startsAt: { lte: now },
-      endsAt: { gte: now },
-      OR: [
-        { scope: "ALL_PRODUCTS" },
-        { scope: "PRODUCT", productId: { in: productIds } },
-        { scope: "CATEGORY", categoryId: { in: categoryIds } },
-      ],
-    },
-  });
-
-  const candidates = candidateRows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    code: row.code,
-    type: row.type,
-    value: row.value,
-    scope: row.scope,
-    categoryId: row.categoryId,
-    productId: row.productId,
-    minOrderAmount: row.minOrderAmount,
-    usageLimit: row.usageLimit,
-    usageCount: row.usageCount,
-    isActive: row.isActive,
-    startsAt: row.startsAt,
-    endsAt: row.endsAt,
-  }));
-
-  let selected = null;
-  if (offerCode) {
-    const row = await tx.offer.findUnique({ where: { code: offerCode } });
-    if (!row) {
-      throw new ValidationError(`Offer code "${offerCode}" is not recognised`, { offerCode });
-    }
-    selected = {
-      id: row.id,
-      name: row.name,
-      code: row.code,
-      type: row.type,
-      value: row.value,
-      scope: row.scope,
-      categoryId: row.categoryId,
-      productId: row.productId,
-      minOrderAmount: row.minOrderAmount,
-      usageLimit: row.usageLimit,
-      usageCount: row.usageCount,
-      isActive: row.isActive,
-      startsAt: row.startsAt,
-      endsAt: row.endsAt,
-    };
-  }
-
-  const pricedLines = items.map((item) => {
-    const row = byId.get(item.productId)!;
-    return {
-      productId: row.id,
-      categoryId: row.categoryId,
-      unitPrice: row.price,
-      quantity: item.quantity,
-    };
-  });
-
-  const evaluation = evaluateOffers({ lines: pricedLines, offers: candidates, selectedOffer: selected, now });
-
-  const lines = pricedLines.map((line) => {
-    const row = byId.get(line.productId)!;
-    const discount = evaluation.lineDiscounts.get(line.productId);
-    const lineSubtotal = multiplyMinor(line.unitPrice, line.quantity);
-    const lineDiscount = discount?.discount ?? 0;
-    return {
-      productId: line.productId,
-      categoryId: line.categoryId,
-      unitPrice: line.unitPrice,
-      quantity: line.quantity,
-      name: row.name,
-      slug: row.slug,
-      sku: row.sku,
-      unitLabel: row.unitLabel,
-      lineDiscount,
-      lineTotal: lineSubtotal - lineDiscount,
-      offerId: discount?.offerId ?? null,
-      offerName: discount?.offerName ?? null,
-    };
-  });
-
-  return {
-    lines,
-    subtotal: evaluation.subtotal,
-    discountTotal: evaluation.subtotal - evaluation.total,
-    total: evaluation.total,
-    appliedOffers: evaluation.appliedOffers,
-    rejections: evaluation.rejections,
-  };
+export interface OrderDetailView {
+  id: number;
+  orderNumber: string;
+  customerId: number | null;
+  status: OrderStatus;
+  fulfilmentMethod: string;
+  customerName: string;
+  customerEmail: string;
+  customerPhone: string;
+  addressLine1: string;
+  addressLine2: string | null;
+  addressCity: string;
+  addressState: string;
+  addressPostalCode: string;
+  addressLandmark: string | null;
+  subtotal: number;
+  discountTotal: number;
+  total: number;
+  deliveryNotes: string;
+  createdAt: Date;
+  confirmedAt: Date | null;
+  deliveredAt: Date | null;
+  cancelledAt: Date | null;
+  items: Array<{
+    id: number;
+    productId: number | null;
+    productName: string;
+    productSlug: string;
+    sku: string;
+    unitLabel: string;
+    unitPrice: number;
+    quantity: number;
+    lineDiscount: number;
+    lineTotal: number;
+    offerId: number | null;
+    offerName: string | null;
+  }>;
+  invoices: Array<{ id: number; invoiceNumber: string; status: string; total: number; issuedAt: Date }>;
+  statusHistory: Array<{
+    id: number;
+    fromStatus: OrderStatus | null;
+    toStatus: OrderStatus;
+    note: string;
+    changedBy: string;
+    createdAt: Date;
+  }>;
+  customer: { id: number; email: string; fullName: string } | null;
 }
 
-/* ============================== order reading ============================ */
-
-export interface ListOrdersQuery {
+export async function listOrders(query: {
   page: number;
   pageSize: number;
   customerId?: number;
@@ -563,84 +471,132 @@ export interface ListOrdersQuery {
   search?: string;
   from?: Date;
   to?: Date;
-}
+}): Promise<{ items: OrderListView[]; meta: { page: number; pageSize: number; total: number; totalPages: number } }> {
+  const where: string[] = [];
+  const params: unknown[] = [];
 
-export async function listOrders(query: ListOrdersQuery) {
-  const where: Prisma.OrderWhereInput = {};
-
-  if (query.customerId !== undefined) where.customerId = query.customerId;
-  if (query.status) where.status = query.status;
-
-  if (query.from || query.to) {
-    where.createdAt = {
-      ...(query.from ? { gte: query.from } : {}),
-      ...(query.to ? { lte: query.to } : {}),
-    };
+  if (query.customerId !== undefined) {
+    where.push("o.customer_id = ?");
+    params.push(query.customerId);
   }
-
+  if (query.status) {
+    where.push("o.status = ?");
+    params.push(query.status);
+  }
+  if (query.from) {
+    where.push("o.created_at >= ?");
+    params.push(query.from);
+  }
+  if (query.to) {
+    where.push("o.created_at <= ?");
+    params.push(query.to);
+  }
   if (query.search) {
     // Escape LIKE wildcards so searching "100%" does not match everything.
     const term = query.search.replace(/[\\%_]/g, (c) => `\\${c}`);
-    where.OR = [
-      { orderNumber: { contains: term } },
-      { customerName: { contains: term } },
-      { customerEmail: { contains: term } },
-      { customerPhone: { contains: term } },
-    ];
+    where.push(
+      "(o.order_number LIKE ? OR o.customer_name LIKE ? OR o.customer_email LIKE ? OR o.customer_phone LIKE ?)",
+    );
+    params.push(`%${term}%`, `%${term}%`, `%${term}%`, `%${term}%`);
   }
 
+  const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+  const offset = (query.page - 1) * query.pageSize;
+
   const [total, rows] = await Promise.all([
-    prisma.order.count({ where }),
-    prisma.order.findMany({
-      where,
-      orderBy: [{ createdAt: "desc" }],
-      skip: (query.page - 1) * query.pageSize,
-      take: query.pageSize,
-      select: {
-        id: true,
-        orderNumber: true,
-        status: true,
-        fulfilmentMethod: true,
-        customerName: true,
-        customerEmail: true,
-        customerPhone: true,
-        addressCity: true,
-        subtotal: true,
-        discountTotal: true,
-        total: true,
-        createdAt: true,
-        _count: { select: { items: true } },
-      },
-    }),
+    countOrders(whereSql, params),
+    listOrderRows(whereSql, params, query.pageSize, offset),
   ]);
 
   return paginate(
-    rows.map((row) => ({ ...row, itemCount: row._count.items })),
+    rows.map((row) => ({
+      id: row.id,
+      orderNumber: row.orderNumber,
+      status: row.status,
+      fulfilmentMethod: row.fulfilmentMethod,
+      customerName: row.customerName,
+      customerEmail: row.customerEmail,
+      customerPhone: row.customerPhone,
+      addressCity: row.addressCity,
+      subtotal: row.subtotal,
+      discountTotal: row.discountTotal,
+      total: row.total,
+      createdAt: row.createdAt,
+      itemCount: Number(row.itemCount),
+    })),
     total,
     query.page,
     query.pageSize,
   );
 }
 
-export async function getOrderById(id: number, options: { customerId?: number } = {}) {
-  const order = await prisma.order.findFirst({
-    where: {
-      id,
-      ...(options.customerId !== undefined ? { customerId: options.customerId } : {}),
-    },
-    include: {
-      items: true,
-      invoices: {
-        orderBy: { id: "asc" },
-        select: { id: true, invoiceNumber: true, status: true, total: true, issuedAt: true },
-      },
-      statusHistory: { orderBy: { createdAt: "asc" } },
-      customer: { select: { id: true, email: true, fullName: true } },
-    },
-  });
-
+export async function getOrderById(
+  id: number,
+  options: { customerId?: number } = {},
+): Promise<OrderDetailView> {
+  const order = await findOrderRow(id, options.customerId);
   if (!order) throw new NotFoundError("Order");
-  return order;
+
+  const [items, invoices, statusHistory] = await Promise.all([
+    listOrderItems(order.id),
+    findInvoicesForOrder(order.id),
+    listOrderStatusHistory(order.id),
+  ]);
+
+  return {
+    id: order.id,
+    orderNumber: order.orderNumber,
+    customerId: order.customerId,
+    status: order.status,
+    fulfilmentMethod: order.fulfilmentMethod,
+    customerName: order.customerName,
+    customerEmail: order.customerEmail,
+    customerPhone: order.customerPhone,
+    addressLine1: order.addressLine1,
+    addressLine2: order.addressLine2,
+    addressCity: order.addressCity,
+    addressState: order.addressState,
+    addressPostalCode: order.addressPostalCode,
+    addressLandmark: order.addressLandmark,
+    subtotal: order.subtotal,
+    discountTotal: order.discountTotal,
+    total: order.total,
+    deliveryNotes: order.deliveryNotes,
+    createdAt: order.createdAt,
+    confirmedAt: order.confirmedAt,
+    deliveredAt: order.deliveredAt,
+    cancelledAt: order.cancelledAt,
+    items: items.map((item) => ({
+      id: item.id,
+      productId: item.productId,
+      productName: item.productName,
+      productSlug: item.productSlug,
+      sku: item.sku,
+      unitLabel: item.unitLabel,
+      unitPrice: item.unitPrice,
+      quantity: item.quantity,
+      lineDiscount: item.lineDiscount,
+      lineTotal: item.lineTotal,
+      offerId: item.offerId,
+      offerName: item.offerName,
+    })),
+    invoices: invoices.map((invoice) => ({
+      id: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      status: invoice.status,
+      total: invoice.total,
+      issuedAt: invoice.issuedAt,
+    })),
+    statusHistory: statusHistory.map((entry) => ({
+      id: entry.id,
+      fromStatus: entry.fromStatus as OrderStatus | null,
+      toStatus: entry.toStatus as OrderStatus,
+      note: entry.note,
+      changedBy: entry.changedBy,
+      createdAt: entry.createdAt,
+    })),
+    customer: null,
+  };
 }
 
 /* =========================== status transitions =========================== */
@@ -659,82 +615,78 @@ export async function changeOrderStatus(
   to: OrderStatus,
   options: { note?: string; changedBy: string },
 ): Promise<StatusChangeResult> {
-  return prisma.$transaction(
-    async (tx) => {
-      const order = await tx.order.findUnique({
-        where: { id: orderId },
-        include: { items: true },
-      });
-      if (!order) throw new NotFoundError("Order");
+  return transaction(async (tx) => {
+    const order = await findOrderForStatusChange(orderId, tx);
+    if (!order) throw new NotFoundError("Order");
 
-      const from = order.status;
+    const from = order.status;
 
-      if (from === to) {
-        throw new IllegalStatusTransitionError(from, to);
-      }
-      if (!canTransitionOrder(from, to)) {
-        const allowed = ORDER_STATUS_TRANSITIONS[from];
-        throw new IllegalStatusTransitionError(
-          `${from} (permitted next: ${allowed.length > 0 ? allowed.join(", ") : "none"})`,
-          to,
-        );
-      }
+    if (from === to) {
+      throw new IllegalStatusTransitionError(from, to);
+    }
+    if (!canTransitionOrder(from, to)) {
+      const allowed = ORDER_STATUS_TRANSITIONS[from];
+      throw new IllegalStatusTransitionError(
+        `${from} (permitted next: ${allowed.length > 0 ? allowed.join(", ") : "none"})`,
+        to,
+      );
+    }
 
-      // Releasing stock is driven by the transition itself, so the ledger and
-      // the cached quantity can never disagree with the order status.
-      const heldBefore = STOCK_HELD_STATUSES.includes(from);
-      const heldAfter = STOCK_HELD_STATUSES.includes(to);
-      let stockRestored = false;
+    // Releasing stock is driven by the transition itself, so the ledger and
+    // the cached quantity can never disagree with the order status.
+    const heldBefore = STOCK_HELD_STATUSES.includes(from);
+    const heldAfter = STOCK_HELD_STATUSES.includes(to);
+    let stockRestored = false;
 
-      if (heldBefore && !heldAfter) {
-        for (const item of order.items) {
-          if (item.productId === null) continue;
-          await applyStockMovement(tx, {
-            productId: item.productId,
-            quantityChange: item.quantity,
-            type: "RETURN",
-            referenceType: "ORDER",
-            referenceId: String(order.id),
-            note: `Order ${order.orderNumber} ${to.toLowerCase()}`,
-          });
-        }
-        stockRestored = true;
-        await releaseRedemptions(tx, order.id);
-
-        await tx.invoice.updateMany({
-          where: { orderId, status: { in: ["DRAFT", "ISSUED"] } },
-          data: { status: "VOID", voidedAt: new Date(), voidReason: `Order ${to.toLowerCase()}` },
+    if (heldBefore && !heldAfter) {
+      const items = await listOrderItems(order.id);
+      for (const item of items) {
+        if (item.productId === null) continue;
+        await applyStockMovement(tx, {
+          productId: item.productId,
+          quantityChange: item.quantity,
+          type: "RETURN",
+          referenceType: "ORDER",
+          referenceId: String(order.id),
+          note: `Order ${order.orderNumber} ${to.toLowerCase()}`,
         });
       }
+      stockRestored = true;
+      await releaseRedemptions(tx, order.id);
+      await voidInvoicesForOrder(orderId, tx);
+    }
 
-      const data: Prisma.OrderUpdateInput = { status: to };
-      if (to === "CONFIRMED") data.confirmedAt = new Date();
-      if (to === "DELIVERED") data.deliveredAt = new Date();
-      if (to === "CANCELLED" || to === "REFUNDED") data.cancelledAt = new Date();
+    await updateOrderStatus(
+      orderId,
+      {
+        status: to,
+        confirmedAt: to === "CONFIRMED",
+        deliveredAt: to === "DELIVERED",
+        cancelledAt: to === "CANCELLED" || to === "REFUNDED",
+      },
+      tx,
+    );
 
-      await tx.order.update({ where: { id: orderId }, data });
-
-      await tx.orderStatusHistory.create({
-        data: {
-          orderId,
-          fromStatus: from,
-          toStatus: to,
-          note: options.note ?? "",
-          changedBy: options.changedBy,
-        },
-      });
-
-      return {
+    await insertOrderStatusHistory(
+      {
         orderId,
-        orderNumber: order.orderNumber,
-        from,
-        to,
-        stockRestored,
-        allowedNext: ORDER_STATUS_TRANSITIONS[to],
-      };
-    },
-    { timeout: 15_000 },
-  );
+        fromStatus: from,
+        toStatus: to,
+        note: options.note ?? "",
+        changedBy: options.changedBy,
+      },
+      tx,
+    );
+
+    return {
+      orderId,
+      orderNumber: order.orderNumber,
+      from,
+      to,
+      stockRestored,
+      allowedNext: ORDER_STATUS_TRANSITIONS[to],
+    };
+  });
 }
 
 export { ORDER_STATUS_TRANSITIONS };

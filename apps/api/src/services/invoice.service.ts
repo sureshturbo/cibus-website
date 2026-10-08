@@ -1,8 +1,18 @@
-import { InvoiceStatus, OrderStatus, Prisma } from "@prisma/client";
-import { paginate, type Paginated } from "@cibus/shared";
+import { paginate } from "@cibus/shared";
 import { NotFoundError, ValidationError } from "../lib/errors.js";
-import { prisma } from "../lib/prisma.js";
 import { env } from "../config/env.js";
+import type { InvoiceStatus, OrderStatus } from "../db/enums.js";
+import {
+  countInvoiceRows,
+  findInvoiceById as findInvoiceRow,
+  findInvoiceRowByOrderId,
+  findInvoiceStatusContext,
+  findOrderById as findOrderRow,
+  listInvoiceRows,
+  listOrderItems,
+  updateInvoiceStatus,
+} from "../db/repositories/orders.repo.js";
+import type { InvoiceRow, OrderItemRow, OrderRow } from "../db/types.js";
 
 /**
  * Invoice service.
@@ -26,85 +36,101 @@ export interface ListInvoicesQuery {
   orderId?: number;
 }
 
-export async function listInvoices(query: ListInvoicesQuery): Promise<Paginated<unknown>> {
-  const where: Prisma.InvoiceWhereInput = {};
+export async function listInvoices(query: ListInvoicesQuery) {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
 
-  if (query.status) where.status = query.status;
-  if (query.orderId) where.orderId = query.orderId;
+  if (query.status) {
+    clauses.push("inv.status = ?");
+    params.push(query.status);
+  }
+  if (query.orderId) {
+    clauses.push("inv.order_id = ?");
+    params.push(query.orderId);
+  }
   if (query.customerId !== undefined) {
-    where.order = { customerId: query.customerId };
+    clauses.push("o.customer_id = ?");
+    params.push(query.customerId);
   }
 
+  const whereSql = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+  const offset = (query.page - 1) * query.pageSize;
+
   const [total, rows] = await Promise.all([
-    prisma.invoice.count({ where }),
-    prisma.invoice.findMany({
-      where,
-      orderBy: [{ issuedAt: "desc" }],
-      skip: (query.page - 1) * query.pageSize,
-      take: query.pageSize,
-      include: {
-        order: {
-          select: {
-            id: true,
-            orderNumber: true,
-            customerName: true,
-            customerEmail: true,
-            status: true,
-            createdAt: true,
-          },
-        },
-      },
-    }),
+    countInvoiceRows(whereSql, params),
+    listInvoiceRows(whereSql, params, query.pageSize, offset),
   ]);
 
-  return paginate(rows, total, query.page, query.pageSize);
+  const items = rows.map((row) => ({
+    id: row.id,
+    invoiceNumber: row.invoiceNumber,
+    financialYear: row.financialYear,
+    orderId: row.orderId,
+    status: row.status,
+    subtotal: row.subtotal,
+    discountTotal: row.discountTotal,
+    total: row.total,
+    issuedAt: row.issuedAt,
+    dueAt: row.dueAt,
+    order: {
+      id: row.orderId,
+      orderNumber: row.orderNumber,
+      customerName: row.orderCustomerName,
+      customerEmail: row.orderCustomerEmail,
+      status: row.orderStatus,
+      createdAt: row.orderCreatedAt,
+    },
+  }));
+
+  return paginate(items, total, query.page, query.pageSize);
+}
+
+interface InvoiceWithOrder {
+  invoice: InvoiceRow;
+  order: OrderRow;
+  items: OrderItemRow[];
+}
+
+function asView({ invoice, order, items }: InvoiceWithOrder) {
+  return { ...invoice, order: { ...order, items } };
+}
+
+async function loadInvoiceWithOrder(
+  invoice: InvoiceRow | null,
+  options: { customerId?: number },
+): Promise<ReturnType<typeof asView> | null> {
+  if (!invoice) return null;
+  const order = await findOrderRow(invoice.orderId, options.customerId);
+  // A customer may only ever read their own invoice; a missing (or mismatched)
+  // order is reported as "not found" so an id cannot be probed.
+  if (!order) return null;
+  const items = await listOrderItems(order.id);
+  return asView({ invoice, order, items });
 }
 
 export async function getInvoiceById(id: number, options: { customerId?: number } = {}) {
-  const invoice = await prisma.invoice.findUnique({
-    where: { id },
-    include: {
-      order: { include: { items: true } },
-    },
-  });
-
-  if (!invoice) throw new NotFoundError("Invoice");
-
-  // A customer may only ever read their own invoice.
-  if (options.customerId !== undefined && invoice.order.customerId !== options.customerId) {
-    throw new NotFoundError("Invoice");
-  }
-
-  return invoice;
+  const invoice = await findInvoiceRow(id);
+  const view = await loadInvoiceWithOrder(invoice, options);
+  if (!view) throw new NotFoundError("Invoice");
+  return view;
 }
 
 export async function getInvoiceByOrderId(orderId: number, options: { customerId?: number } = {}) {
-  const invoice = await prisma.invoice.findFirst({
-    where: { orderId },
-    include: { order: { include: { items: true } } },
-    orderBy: { id: "asc" },
-  });
-
-  if (!invoice) throw new NotFoundError("Invoice");
-  if (options.customerId !== undefined && invoice.order.customerId !== options.customerId) {
-    throw new NotFoundError("Invoice");
-  }
-
-  return invoice;
+  const invoice = await findInvoiceRowByOrderId(orderId);
+  const view = await loadInvoiceWithOrder(invoice, options);
+  if (!view) throw new NotFoundError("Invoice");
+  return view;
 }
 
 export async function setInvoiceStatus(id: number, status: InvoiceStatus, reason?: string) {
-  const invoice = await prisma.invoice.findUnique({
-    where: { id },
-    select: { id: true, status: true, total: true, order: { select: { status: true, orderNumber: true } } },
-  });
+  const invoice = await findInvoiceStatusContext(id);
   if (!invoice) throw new NotFoundError("Invoice");
 
   if (invoice.status === "VOID") {
     throw new ValidationError("A voided invoice cannot be changed");
   }
 
-  if (status === "PAID" && invoice.order.status === "PENDING") {
+  if (status === "PAID" && invoice.orderStatus === "PENDING") {
     // Marking an invoice paid normally follows a payment event. Since no gateway
     // is integrated yet, this must be an explicit, deliberate action.
     throw new ValidationError(
@@ -112,13 +138,10 @@ export async function setInvoiceStatus(id: number, status: InvoiceStatus, reason
     );
   }
 
-  return prisma.invoice.update({
-    where: { id },
-    data: {
-      status,
-      ...(status === "VOID" ? { voidedAt: new Date(), voidReason: reason ?? "Voided by administrator" } : {}),
-    },
-  });
+  await updateInvoiceStatus(id, status, reason);
+  const updated = await findInvoiceRow(id);
+  if (!updated) throw new NotFoundError("Invoice");
+  return updated;
 }
 
 export interface InvoiceView {
@@ -225,7 +248,6 @@ export function buildInvoiceView(invoice: {
       quantity: item.quantity,
       discount: item.lineDiscount,
       total: item.lineTotal,
-      ...(item.offerName ? {} : {}),
     })),
     subtotal: invoice.subtotal,
     discountTotal: invoice.discountTotal,
@@ -234,7 +256,6 @@ export function buildInvoiceView(invoice: {
       ...(invoice.discountTotal > 0 ? ["Discounts shown per line are already deducted."] : []),
       "Payment is arranged directly with our team. No online payment has been processed.",
       ...(order.deliveryNotes ? [`Delivery notes: ${order.deliveryNotes}`] : []),
-      ...(env.INVOICE_PREFIX ? [] : []),
     ],
   };
 }

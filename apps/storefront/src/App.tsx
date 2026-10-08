@@ -13,6 +13,7 @@ import Account from "./pages/Account.js";
 import OrderConfirmationPage from "./pages/OrderConfirmation.js";
 import StaticPageView from "./pages/StaticPage.js";
 import NotFound from "./pages/NotFound.js";
+import AdminApp from "./admin/App.js";
 
 /**
  * Provider order matters: the cart is needed to merge a guest basket at sign-in,
@@ -26,6 +27,12 @@ export default function App() {
         <UiProvider>
           <ToastProvider>
             <Routes>
+              {/*
+                The admin panel is part of this same SPA, so `/admin` needs no
+                second dev server. It sits outside the storefront `Layout` —
+                the panel brings its own chrome and dark theme.
+              */}
+              <Route path="admin/*" element={<AdminApp />} />
               <Route element={<Layout />}>
                 <Route index element={<Home />} />
                 <Route path="products" element={<Products />} />

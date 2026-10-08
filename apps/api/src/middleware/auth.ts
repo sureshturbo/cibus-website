@@ -3,7 +3,7 @@ import type { TokenAudience } from "../lib/crypto.js";
 import { verifyAccessToken } from "../lib/crypto.js";
 import { ACCESS_COOKIE } from "../lib/authCookies.js";
 import { ForbiddenError, UnauthenticatedError } from "../lib/errors.js";
-import { prisma } from "../lib/prisma.js";
+import { findActiveAdminById, findActiveCustomerById } from "../db/repositories/auth.repo.js";
 
 export interface AuthContext {
   id: number;
@@ -54,8 +54,8 @@ function requireAuth(audience: TokenAudience): RequestHandler {
 
       const active =
         audience === "admin"
-          ? await prisma.admin.findFirst({ where: { id: claims.sub, isActive: true }, select: { id: true } })
-          : await prisma.customer.findFirst({ where: { id: claims.sub, isActive: true }, select: { id: true } });
+          ? await findActiveAdminById(claims.sub)
+          : await findActiveCustomerById(claims.sub);
 
       if (!active) throw new ForbiddenError("This account is no longer active");
 

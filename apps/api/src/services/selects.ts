@@ -1,82 +1,35 @@
-import type { OfferScope, OfferType, Prisma } from "@prisma/client";
+import type { OfferScope, OfferType } from "@cibus/shared";
 
-/** Reusable select shapes, so the storefront never receives a field it must not see. */
+/**
+ * Pure projection and vocabulary helpers shared by the storefront and admin
+ * panel. The Prisma-derived select shapes that used to live here were removed
+ * with the raw-SQL migration; the row interfaces in `db/types.ts` now describe
+ * what the queries return.
+ */
 
-export const publicProductSelect = {
-  id: true,
-  name: true,
-  slug: true,
-  sku: true,
-  shortDescription: true,
-  description: true,
-  unitLabel: true,
-  price: true,
-  compareAtPrice: true,
-  stockQuantity: true,
-  lowStockThreshold: true,
-  allowBackorder: true,
-  isActive: true,
-  isFeatured: true,
-  createdAt: true,
-  updatedAt: true,
-} satisfies Prisma.ProductSelect;
-
-export type PublicProduct = Prisma.ProductGetPayload<{ select: typeof publicProductSelect }>;
-
-export const adminProductSelect = {
-  ...publicProductSelect,
-  categoryId: true,
-  deletedAt: true,
-  category: { select: { id: true, name: true, slug: true, parentId: true } },
-  images: {
-    select: { id: true, url: true, altText: true, isPrimary: true, sortOrder: true },
-    orderBy: [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }],
-  },
-} satisfies Prisma.ProductSelect;
-
-export type AdminProduct = Prisma.ProductGetPayload<{ select: typeof adminProductSelect }>;
-
-export const categorySelect = {
-  id: true,
-  name: true,
-  slug: true,
-  parentId: true,
-  description: true,
-  imageUrl: true,
-  sortOrder: true,
-  isActive: true,
-  createdAt: true,
-  updatedAt: true,
-} satisfies Prisma.CategorySelect;
-
-export type CategoryRecord = Prisma.CategoryGetPayload<{ select: typeof categorySelect }>;
-
-export const offerSelect = {
-  id: true,
-  name: true,
-  code: true,
-  type: true,
-  value: true,
-  scope: true,
-  categoryId: true,
-  productId: true,
-  minOrderAmount: true,
-  startsAt: true,
-  endsAt: true,
-  usageLimit: true,
-  usageCount: true,
-  isActive: true,
-  createdAt: true,
-  updatedAt: true,
-} satisfies Prisma.OfferSelect;
-
-export type OfferRecordRow = Prisma.OfferGetPayload<{ select: typeof offerSelect }>;
+/** The offer fields the shared evaluator needs. */
+export interface EvaluationOfferSource {
+  id: number;
+  name: string;
+  code: string | null;
+  type: OfferType | string;
+  value: number;
+  scope: OfferScope | string;
+  categoryId: number | null;
+  productId: number | null;
+  minOrderAmount: number;
+  usageLimit: number | null;
+  usageCount: number;
+  isActive: boolean;
+  startsAt: Date;
+  endsAt: Date;
+}
 
 /**
  * Convert a database offer row into the pure-evaluation shape used by
  * packages/shared. Kept in one place so the mapping cannot drift between routes.
  */
-export function toEvaluationOffer(row: OfferRecordRow) {
+export function toEvaluationOffer(row: EvaluationOfferSource) {
   return {
     id: row.id,
     name: row.name,

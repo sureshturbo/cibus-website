@@ -3,7 +3,7 @@ import { ZodError, type ZodTypeAny, type z } from "zod";
 import { ERROR_CODES } from "@cibus/shared";
 import { AppError, ValidationError } from "./errors.js";
 import { logger } from "./logger.js";
-import { isForeignKeyError, isUniqueConstraintError } from "./prisma.js";
+import { isForeignKeyError, isUniqueConstraintError } from "../db/errors.js";
 
 /* ----------------------------- envelopes --------------------------------- */
 
@@ -88,12 +88,23 @@ interface ErrorBody {
 
 /* ------------------------------- handlers -------------------------------- */
 
-interface PrismaLikeError {
+interface SqlLikeError {
   code?: string;
+  sqlMessage?: string;
+  message?: string;
   meta?: { target?: string | string[]; field_name?: string };
 }
 
-function describeUniqueViolation(error: PrismaLikeError): string {
+/** Turn a duplicate-key error into a field name a customer can act on. */
+function describeUniqueViolation(error: SqlLikeError): string {
+  // mysql2: "Duplicate entry 'x' for key 'products.sku'" (key may be UQ_... or the column).
+  const sql = error.sqlMessage ?? error.message ?? "";
+  const keyMatch = /for key '([^']+)'/.exec(sql);
+  if (keyMatch) {
+    const fullKey = keyMatch[1] ?? "";
+    const key = fullKey.split(".").pop() ?? fullKey;
+    return `That ${key} is already in use`;
+  }
   const target = error.meta?.target;
   const fields = Array.isArray(target) ? target.join(", ") : (target ?? error.meta?.field_name ?? "value");
   return `That ${fields} is already in use`;
@@ -129,7 +140,7 @@ export function errorHandler(
   }
 
   if (isUniqueConstraintError(error)) {
-    const message = describeUniqueViolation(error as PrismaLikeError);
+    const message = describeUniqueViolation(error as SqlLikeError);
     logger.warn("http.conflict", { requestId, message });
     res.status(409).json({
       success: false,

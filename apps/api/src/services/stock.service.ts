@@ -1,14 +1,19 @@
-import { Prisma } from "@prisma/client";
 import { paginate, type Paginated } from "@cibus/shared";
 import { NotFoundError } from "../lib/errors.js";
-import { prisma } from "../lib/prisma.js";
-import { sequenceSegment, currentFinancialYear } from "../lib/util.js";
+import { db, transaction, type Tx } from "../db/pool.js";
 import { env } from "../config/env.js";
-
-type Tx = Prisma.TransactionClient;
-
-/** Row shape returned by the sequence-counter query. */
-type SequenceRow = { lastValue: number };
+import { sequenceSegment, currentFinancialYear } from "../lib/util.js";
+import { insertStockMovement } from "../db/repositories/catalog.repo.js";
+import {
+  conditionalStockUpdate,
+  countStockMovements,
+  ensureSequenceCounter,
+  findProductStock,
+  findProductStockSnapshot,
+  listStockMovementRows,
+  lockSequenceValue,
+  updateSequenceValue,
+} from "../db/repositories/stock.repo.js";
 
 /**
  * Stock service.
@@ -49,10 +54,7 @@ export interface AdjustStockInput {
  * starting value.
  */
 export async function applyStockMovement(tx: Tx, input: AdjustStockInput): Promise<number> {
-  const product = await tx.product.findUnique({
-    where: { id: input.productId },
-    select: { id: true, stockQuantity: true, allowBackorder: true, name: true, deletedAt: true },
-  });
+  const product = await findProductStock(input.productId, tx);
 
   if (!product || product.deletedAt) throw new NotFoundError("Product");
 
@@ -64,18 +66,15 @@ export async function applyStockMovement(tx: Tx, input: AdjustStockInput): Promi
     throw new NotFoundError("Product");
   }
 
-  const updated = await tx.product.updateMany({
-    where: { id: input.productId, stockQuantity: product.stockQuantity },
-    data: { stockQuantity: balanceAfter },
-  });
+  const affected = await conditionalStockUpdate(input.productId, product.stockQuantity, balanceAfter, tx);
 
-  if (updated.count === 0) {
+  if (affected === 0) {
     // Another transaction moved this product between our read and write.
     throw new StockConflictError(product.name);
   }
 
-  await tx.stockMovement.create({
-    data: {
+  await insertStockMovement(
+    {
       productId: input.productId,
       type: input.type,
       quantityChange: input.quantityChange,
@@ -85,7 +84,8 @@ export async function applyStockMovement(tx: Tx, input: AdjustStockInput): Promi
       note: input.note ?? "",
       createdById: input.createdById ?? null,
     },
-  });
+    tx,
+  );
 
   return balanceAfter;
 }
@@ -99,13 +99,10 @@ export class StockConflictError extends Error {
 
 /** Admin-facing manual adjustment, committed on its own. */
 export async function adjustStock(input: AdjustStockInput, adminId: number) {
-  return prisma.$transaction(async (tx) => {
+  return transaction(async (tx) => {
     const balanceAfter = await applyStockMovement(tx, { ...input, createdById: adminId });
 
-    const product = await tx.product.findUnique({
-      where: { id: input.productId },
-      select: { id: true, name: true, sku: true, stockQuantity: true, lowStockThreshold: true },
-    });
+    const product = await findProductStockSnapshot(input.productId, tx);
     if (!product) throw new NotFoundError("Product");
 
     return {
@@ -124,21 +121,31 @@ export interface LedgerQuery {
 }
 
 export async function listStockMovements(query: LedgerQuery): Promise<Paginated<unknown>> {
-  const where: Prisma.StockMovementWhereInput = { productId: query.productId };
-  if (query.type) where.type = query.type as Prisma.StockMovementWhereInput["type"];
+  const offset = (query.page - 1) * query.pageSize;
 
   const [total, rows] = await Promise.all([
-    prisma.stockMovement.count({ where }),
-    prisma.stockMovement.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      skip: (query.page - 1) * query.pageSize,
-      take: query.pageSize,
-      include: { createdBy: { select: { id: true, fullName: true, email: true } } },
-    }),
+    countStockMovements(query.productId, query.type),
+    listStockMovementRows(query.productId, query.type, query.pageSize, offset),
   ]);
 
-  return paginate(rows, total, query.page, query.pageSize);
+  const items = rows.map((row) => ({
+    id: row.id,
+    productId: row.productId,
+    type: row.type,
+    quantityChange: row.quantityChange,
+    balanceAfter: row.balanceAfter,
+    referenceType: row.referenceType,
+    referenceId: row.referenceId,
+    note: row.note,
+    createdById: row.createdById,
+    createdAt: row.createdAt,
+    createdBy:
+      row.creatorId !== null
+        ? { id: row.creatorId, fullName: row.creatorFullName, email: row.creatorEmail }
+        : null,
+  }));
+
+  return paginate(items, total, query.page, query.pageSize);
 }
 
 export interface LowStockItem {
@@ -150,31 +157,20 @@ export interface LowStockItem {
   unitLabel: string;
 }
 
-/** Row shape returned by the raw low-stock query. */
-type LowStockRow = {
-  id: number;
-  name: string;
-  sku: string;
-  stockQuantity: number;
-  lowStockThreshold: number;
-  unitLabel: string;
-};
-
 /** Everything at or below its threshold, most urgent first. */
 export async function findLowStockProducts(limit = 20): Promise<LowStockItem[]> {
-  const rows = await prisma.$queryRaw<LowStockRow[]>(Prisma.sql`
-    SELECT id, name, sku, stock_quantity AS stockQuantity,
-           low_stock_threshold AS lowStockThreshold, unit_label AS unitLabel
-    FROM products
-    WHERE is_active = 1
-      AND deleted_at IS NULL
-      AND stock_quantity <= low_stock_threshold
-      AND allow_backorder = 0
-    ORDER BY (stock_quantity - low_stock_threshold) ASC, name ASC
-    LIMIT ${limit}
-  `);
-
-  return rows;
+  return db.query<LowStockItem>(
+    `SELECT id, name, sku, stock_quantity AS stockQuantity,
+            low_stock_threshold AS lowStockThreshold, unit_label AS unitLabel
+       FROM products
+      WHERE is_active = 1
+        AND deleted_at IS NULL
+        AND stock_quantity <= low_stock_threshold
+        AND allow_backorder = 0
+      ORDER BY (stock_quantity - low_stock_threshold) ASC, name ASC
+      LIMIT ?`,
+    [limit],
+  );
 }
 
 /* ----------------------------- document numbers -------------------------- */
@@ -195,19 +191,9 @@ async function nextSequenceValue(
   period: string,
   prefix: string,
 ): Promise<{ value: number; formatted: string }> {
-  await tx.$executeRaw`
-    INSERT IGNORE INTO sequence_counters (scope, period, last_value, prefix, updated_at)
-    VALUES (${scope}, ${period}, 0, ${prefix}, NOW(3))
-  `;
+  await ensureSequenceCounter(scope, period, prefix, tx);
 
-  const rows = await tx.$queryRaw<SequenceRow[]>(Prisma.sql`
-    SELECT last_value AS lastValue
-    FROM sequence_counters
-    WHERE scope = ${scope} AND period = ${period}
-    FOR UPDATE
-  `);
-
-  const current = rows[0];
+  const current = await lockSequenceValue(scope, period, tx);
   if (!current) {
     // The row was removed between the insert and the lock. Extremely unlikely,
     // but failing loudly beats issuing a duplicate number.
@@ -215,12 +201,7 @@ async function nextSequenceValue(
   }
 
   const value = current.lastValue + 1;
-
-  await tx.$executeRaw`
-    UPDATE sequence_counters
-    SET last_value = ${value}, updated_at = NOW(3)
-    WHERE scope = ${scope} AND period = ${period}
-  `;
+  await updateSequenceValue(scope, period, value, tx);
 
   return { value, formatted: `${prefix}/${period}/${sequenceSegment(value)}` };
 }

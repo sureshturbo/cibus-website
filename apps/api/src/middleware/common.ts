@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { env } from "../config/env.js";
-import { prisma } from "../lib/prisma.js";
+import { disconnectDatabase, queryOne } from "../db/pool.js";
 
 /* ------------------------- request correlation id ------------------------ */
 
@@ -87,7 +87,7 @@ export const securityHeaders: RequestHandler = (req: Request, res: Response, nex
 export async function assertDatabaseReady(attempts = 5): Promise<void> {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      await prisma.$queryRaw`SELECT 1`;
+      await queryOne("SELECT 1");
       return;
     } catch (error) {
       const last = attempt === attempts;
@@ -149,7 +149,7 @@ export function installProcessGuards(): void {
     forceExit.unref();
 
     try {
-      await prisma.$disconnect();
+      await disconnectDatabase();
       clearTimeout(forceExit);
       console.log(
         JSON.stringify({ ts: new Date().toISOString(), level: "info", msg: "shutdown.complete" }),

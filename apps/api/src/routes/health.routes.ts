@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { env } from "../config/env.js";
-import { prisma } from "../lib/prisma.js";
+import { db } from "../db/pool.js";
 import { sendOk } from "../lib/http.js";
 
 export const healthRouter = Router();
@@ -36,7 +36,7 @@ healthRouter.get("/ready", async (_req, res) => {
 
   const dbStart = Date.now();
   try {
-    await prisma.$queryRawUnsafe("SELECT 1");
+    await db.queryOne("SELECT 1");
     checks.database = { status: "ok", latencyMs: Date.now() - dbStart };
   } catch (error) {
     checks.database = {
@@ -48,7 +48,7 @@ healthRouter.get("/ready", async (_req, res) => {
 
   const storageStart = Date.now();
   try {
-    await prisma.product.count({ take: 1 });
+    await db.queryOne("SELECT id FROM products LIMIT 1");
     checks.schema = { status: "ok", latencyMs: Date.now() - storageStart };
   } catch (error) {
     checks.schema = {

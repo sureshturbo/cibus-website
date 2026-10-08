@@ -6,8 +6,7 @@ import { env } from "../config/env.js";
 import { controller, stringParam } from "../lib/controller.js";
 import { NotFoundError } from "../lib/errors.js";
 import { sendOk, validate, validatedQuery } from "../lib/http.js";
-import { prisma } from "../lib/prisma.js";
-import { getPublicProductBySlug, listPublicProducts } from "../services/product.service.js";
+import { getPublicProductBySlug, listPublicCategories, listPublicProducts } from "../services/product.service.js";
 
 export const publicRouter = Router();
 
@@ -65,25 +64,7 @@ publicRouter.get(
 publicRouter.get(
   "/categories",
   controller(async (_req, res) => {
-    const categories = await prisma.category.findMany({
-      where: { isActive: true, parentId: null },
-      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        description: true,
-        imageUrl: true,
-        _count: { select: { products: { where: { isActive: true, deletedAt: null } } } },
-      },
-    });
-
-    sendOk(res, {
-      categories: categories.map(({ _count, ...category }) => ({
-        ...category,
-        productCount: _count.products,
-      })),
-    });
+    sendOk(res, { categories: await listPublicCategories() });
   }),
 );
 

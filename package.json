@@ -11,10 +11,9 @@
     "node": ">=22.11.0"
   },
   "scripts": {
-    "dev": "npm-run-all --parallel dev:api dev:storefront dev:admin",
+    "dev": "npm-run-all --parallel dev:api dev:storefront",
     "dev:api": "npm run dev --workspace @cibus/api",
     "dev:storefront": "npm run dev --workspace @cibus/storefront",
-    "dev:admin": "npm run dev --workspace @cibus/admin",
     "build": "npm run build --workspace @cibus/shared && npm run build --workspace @cibus/api && npm run build --workspace @cibus/storefront && npm run build --workspace @cibus/admin",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",

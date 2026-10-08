@@ -1,9 +1,46 @@
 import { randomBytes } from "node:crypto";
-import { Prisma } from "@prisma/client";
 import { paginate, type Paginated } from "@cibus/shared";
 import { NotFoundError } from "../lib/errors.js";
-import { prisma } from "../lib/prisma.js";
-import { adminProductSelect, availabilityOf, categorySelect, isPurchasable } from "./selects.js";
+import { transaction, type Tx } from "../db/pool.js";
+import type { CategoryRow, ProductImageRow, ProductRow } from "../db/types.js";
+import {
+  categoriesByIds,
+  categoryDeleteRefs,
+  categorySlugExists,
+  countProducts,
+  deleteCartItemsForProduct,
+  deleteCategoryRow,
+  deleteProductImageRow,
+  findActiveProductBySlug,
+  findCategoryById,
+  findCategoryBySlugActive,
+  findCategoryIdBySlug,
+  findCategoryParent,
+  findFirstProductImage,
+  findProductById,
+  findProductImage,
+  getCategoryWithCounts,
+  imagesForProductIds,
+  insertCategory,
+  insertProduct,
+  insertProductImage,
+  insertStockMovement,
+  listCategoryRows,
+  listChildCategoryRows,
+  listProductRows,
+  listStockMovements,
+  listTopLevelCategoryRows,
+  lowStockProductIdRows,
+  productSlugExists,
+  updateCategoryRow,
+  updateProductRow,
+  adminsByIds,
+  productRefCounts,
+  clearPrimaryImages,
+  setPrimaryImage,
+  updateImageOrder,
+} from "../db/repositories/catalog.repo.js";
+import { availabilityOf, isPurchasable } from "./selects.js";
 import { slugify, summarise } from "../lib/util.js";
 
 /**
@@ -13,25 +50,14 @@ import { slugify, summarise } from "../lib/util.js";
  * described one way in the shop and another way in the panel.
  */
 
-type Tx = Prisma.TransactionClient;
-
 /* ------------------------------- categories ------------------------------ */
 
 export async function listCategories(options: { includeInactive: boolean; tree: boolean }) {
-  const where: Prisma.CategoryWhereInput = options.includeInactive ? {} : { isActive: true };
+  const rows = await listCategoryRows(options.includeInactive);
 
-  const categories = await prisma.category.findMany({
-    where,
-    orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-    select: {
-      ...categorySelect,
-      _count: { select: { products: { where: { isActive: true, deletedAt: null } } } },
-    },
-  });
-
-  const flat = categories.map(({ _count, ...category }) => ({
+  const flat = rows.map(({ productCount, ...category }) => ({
     ...category,
-    productCount: _count.products,
+    productCount: Number(productCount),
   }));
 
   if (!options.tree) return flat;
@@ -52,25 +78,33 @@ export async function listCategories(options: { includeInactive: boolean; tree: 
   return roots;
 }
 
+/** Active top-level categories with live product counts (storefront menu). */
+export async function listPublicCategories() {
+  const rows = await listTopLevelCategoryRows();
+  return rows.map((row) => ({ ...row, productCount: Number(row.productCount) }));
+}
+
 export async function getCategoryById(id: number) {
-  const category = await prisma.category.findUnique({
-    where: { id },
-    select: { ...categorySelect, _count: { select: { products: true, children: true } } },
-  });
-  if (!category) throw new NotFoundError("Category");
+  const row = await getCategoryWithCounts(id);
+  if (!row) throw new NotFoundError("Category");
+  const { productCount, childCount, ...category } = row;
   return {
     ...category,
-    productCount: category._count.products,
-    childCount: category._count.children,
+    productCount: Number(productCount),
+    childCount: Number(childCount),
   };
 }
 
 export async function getCategoryBySlug(slug: string) {
-  const category = await prisma.category.findFirst({
-    where: { slug, isActive: true },
-    select: { ...categorySelect, parent: { select: categorySelect }, children: { select: categorySelect } },
-  });
-  return category;
+  const category = await findCategoryBySlugActive(slug);
+  if (!category) return null;
+
+  const [parent, children] = await Promise.all([
+    category.parentId !== null ? findCategoryById(category.parentId) : Promise.resolve(null),
+    listChildCategoryRows(category.id),
+  ]);
+
+  return { ...category, parent, children };
 }
 
 export interface CreateCategoryInput {
@@ -95,10 +129,7 @@ export async function assertNoCategoryCycle(categoryId: number, parentId: number
     if (seen.has(cursor)) break; // existing cycle in data; stop rather than spin
     seen.add(cursor);
 
-    const parent: { parentId: number | null } | null = await prisma.category.findUnique({
-      where: { id: cursor },
-      select: { parentId: true },
-    });
+    const parent = await findCategoryParent(cursor);
     cursor = parent?.parentId ?? null;
   }
 }
@@ -111,16 +142,12 @@ export async function assertNoCategoryCycle(categoryId: number, parentId: number
  * two products genuinely can share a name, and forcing the admin to invent a
  * second slug by hand is a worse outcome than a tidy one.
  */
-async function uniqueSlug(
-  model: { findFirst: (args: { where: { slug: string } }) => Promise<unknown> },
-  desired: string,
-): Promise<string> {
+async function uniqueSlug(taken: (slug: string) => Promise<boolean>, desired: string): Promise<string> {
   const base = slugify(desired);
   let candidate = base;
 
   for (let suffix = 2; suffix < 200; suffix += 1) {
-    const clash = await model.findFirst({ where: { slug: candidate } });
-    if (!clash) return candidate;
+    if (!(await taken(candidate))) return candidate;
     candidate = `${base}-${suffix}`;
   }
 
@@ -129,22 +156,19 @@ async function uniqueSlug(
 }
 
 export async function createCategory(input: CreateCategoryInput) {
-  return prisma.category.create({
-    data: {
-      name: input.name,
-      slug: await uniqueSlug(prisma.category, input.slug || input.name),
-      parentId: input.parentId ?? null,
-      description: input.description ?? "",
-      imageUrl: input.imageUrl || null,
-      sortOrder: input.sortOrder ?? 0,
-      isActive: input.isActive ?? true,
-    },
-    select: categorySelect,
+  return insertCategory({
+    name: input.name,
+    slug: await uniqueSlug((slug) => categorySlugExists(slug), input.slug || input.name),
+    parentId: input.parentId ?? null,
+    description: input.description ?? "",
+    imageUrl: input.imageUrl || null,
+    sortOrder: input.sortOrder ?? 0,
+    isActive: input.isActive ?? true,
   });
 }
 
 export async function updateCategory(id: number, input: Partial<CreateCategoryInput>) {
-  const existing = await prisma.category.findUnique({ where: { id }, select: { id: true } });
+  const existing = await findCategoryById(id);
   if (!existing) throw new NotFoundError("Category");
 
   // assertNoCategoryCycle already rejects a self-parent, so it must run for that
@@ -154,19 +178,16 @@ export async function updateCategory(id: number, input: Partial<CreateCategoryIn
     await assertNoCategoryCycle(id, input.parentId);
   }
 
-  return prisma.category.update({
-    where: { id },
-    data: {
-      ...(input.name !== undefined ? { name: input.name } : {}),
-      ...(input.slug !== undefined && input.slug ? { slug: input.slug } : {}),
-      ...(input.parentId !== undefined ? { parentId: input.parentId } : {}),
-      ...(input.description !== undefined ? { description: input.description ?? "" } : {}),
-      ...(input.imageUrl !== undefined ? { imageUrl: input.imageUrl || null } : {}),
-      ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {}),
-      ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
-    },
-    select: categorySelect,
-  });
+  const values: Record<string, unknown> = {};
+  if (input.name !== undefined) values.name = input.name;
+  if (input.slug !== undefined && input.slug) values.slug = input.slug;
+  if (input.parentId !== undefined) values.parentId = input.parentId;
+  if (input.description !== undefined) values.description = input.description ?? "";
+  if (input.imageUrl !== undefined) values.imageUrl = input.imageUrl || null;
+  if (input.sortOrder !== undefined) values.sortOrder = input.sortOrder;
+  if (input.isActive !== undefined) values.isActive = input.isActive;
+
+  return updateCategoryRow(id, values);
 }
 
 /**
@@ -174,25 +195,22 @@ export async function updateCategory(id: number, input: Partial<CreateCategoryIn
  * because order history must stay readable. Deletion is allowed only when empty.
  */
 export async function deleteCategory(id: number) {
-  const category = await prisma.category.findUnique({
-    where: { id },
-    select: { id: true, _count: { select: { products: true, children: true, offers: true } } },
-  });
+  const category = await categoryDeleteRefs(id);
   if (!category) throw new NotFoundError("Category");
 
-  if (category._count.products > 0) {
+  if (Number(category.products) > 0) {
     throw new Error(
       "This category still holds products. Move or deactivate them before deleting the category.",
     );
   }
-  if (category._count.children > 0) {
+  if (Number(category.children) > 0) {
     throw new Error("This category still has subcategories. Remove or move them first.");
   }
-  if (category._count.offers > 0) {
+  if (Number(category.offers) > 0) {
     throw new Error("This category is used by one or more offers. Disable those offers first.");
   }
 
-  await prisma.category.delete({ where: { id } });
+  await deleteCategoryRow(id);
 }
 
 /* -------------------------------- products ------------------------------- */
@@ -211,269 +229,320 @@ export interface ListProductsQuery {
 }
 
 export async function listProducts(query: ListProductsQuery): Promise<Paginated<unknown>> {
-  const where = await buildProductWhere(query);
-
+  const { sql, params } = await buildProductWhere(query);
   const orderBy = resolveOrderBy(query.sort);
   const skip = (query.page - 1) * query.pageSize;
 
   const [total, rows] = await Promise.all([
-    prisma.product.count({ where }),
-    prisma.product.findMany({
-      where,
-      orderBy,
-      skip,
-      take: query.pageSize,
-      select: { ...adminProductSelect },
-    }),
+    countProducts(sql, params),
+    listProductRows(sql, params, orderBy, query.pageSize, skip),
   ]);
 
-  const items = rows.map((product) => ({
-    ...product,
-    availability: availabilityOf(product),
-    description: product.description,
-    shortDescription: product.shortDescription,
+  const decorated = await decorateProducts(rows);
+  const items = decorated.map((product) => ({
+    ...adminProductItem(product),
+    availability: availabilityOf(product.row),
   }));
 
   return paginate(items, total, query.page, query.pageSize);
 }
 
-async function buildProductWhere(query: ListProductsQuery): Promise<Prisma.ProductWhereInput> {
-  const where: Prisma.ProductWhereInput = {};
+interface WhereFragment {
+  sql: string;
+  params: unknown[];
+}
 
-  if (!query.includeDeleted) where.deletedAt = null;
+async function buildProductWhere(query: ListProductsQuery): Promise<WhereFragment> {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+
+  if (!query.includeDeleted) clauses.push("p.deleted_at IS NULL");
 
   switch (query.status) {
     case "active":
-      where.isActive = true;
+      clauses.push("p.is_active = 1");
       break;
     case "inactive":
-      where.isActive = false;
+      clauses.push("p.is_active = 0");
       break;
-    case "low_stock":
-      // Column-to-column comparison, which the Prisma query builder cannot
-      // express. Resolved to a list of ids by raw SQL.
-      where.id = { in: await lowStockProductIds() };
+    case "low_stock": {
+      // Column-to-column comparison, which a query builder cannot express.
+      // Resolved to a list of ids first.
+      const ids = await lowStockProductIds();
+      if (ids.length === 0) return { sql: "WHERE 1 = 0", params: [] };
+      clauses.push(`p.id IN (${ids.map(() => "?").join(",")})`);
+      params.push(...ids);
       break;
+    }
     case "out_of_stock":
-      where.stockQuantity = { lte: 0 };
+      clauses.push("p.stock_quantity <= 0");
       break;
     default:
       break;
   }
 
-  if (query.featured !== undefined) where.isFeatured = query.featured;
+  if (query.featured !== undefined) {
+    clauses.push("p.is_featured = ?");
+    params.push(query.featured);
+  }
 
   if (query.categoryId) {
-    where.categoryId = query.categoryId;
+    clauses.push("p.category_id = ?");
+    params.push(query.categoryId);
   } else if (query.categorySlug) {
-    const category = await prisma.category.findUnique({
-      where: { slug: query.categorySlug },
-      select: { id: true },
-    });
-    if (!category) {
+    const categoryId = await findCategoryIdBySlug(query.categorySlug);
+    if (categoryId === null) {
       // An unknown slug must return an empty page, not an error or, worse, an
       // unfiltered list.
-      return { id: -1 };
+      return { sql: "WHERE 1 = 0", params: [] };
     }
-    where.categoryId = category.id;
+    clauses.push("p.category_id = ?");
+    params.push(categoryId);
   }
 
   if (query.inStock !== undefined) {
-    where.stockQuantity = query.inStock ? { gt: 0 } : { lte: 0 };
+    clauses.push(query.inStock ? "p.stock_quantity > 0" : "p.stock_quantity <= 0");
   }
 
   if (query.search) {
     // Escape LIKE wildcards so a search for "100%" does not match everything.
     const term = query.search.replace(/[\\%_]/g, (c) => `\\${c}`);
-    where.OR = [
-      { name: { contains: term } },
-      { shortDescription: { contains: term } },
-      { sku: { contains: term } },
-      { description: { contains: term } },
-    ];
+    const like = `%${term}%`;
+    clauses.push("(p.name LIKE ? OR p.short_description LIKE ? OR p.sku LIKE ? OR p.description LIKE ?)");
+    params.push(like, like, like, like);
   }
 
-  return where;
+  const sql = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+  return { sql, params };
 }
-
-/** Row shape returned by the raw low-stock query. */
-type LowStockIdRow = { id: number };
 
 /** Ids of active products at or below their low-stock threshold. */
 export async function lowStockProductIds(): Promise<number[]> {
-  const rows = await prisma.$queryRaw<LowStockIdRow[]>(Prisma.sql`
-    SELECT id FROM products
-    WHERE is_active = 1 AND deleted_at IS NULL AND stock_quantity <= low_stock_threshold
-  `);
+  const rows = await lowStockProductIdRows();
   return rows.map((row) => row.id);
 }
 
-function resolveOrderBy(sort: ListProductsQuery["sort"]): Prisma.ProductOrderByWithRelationInput[] {
+function resolveOrderBy(sort: ListProductsQuery["sort"]): string {
   switch (sort) {
     case "price_asc":
-      return [{ price: "asc" }, { id: "asc" }];
+      return "p.price ASC, p.id ASC";
     case "price_desc":
-      return [{ price: "desc" }, { id: "asc" }];
+      return "p.price DESC, p.id ASC";
     case "name_asc":
-      return [{ name: "asc" }, { id: "asc" }];
+      return "p.name ASC, p.id ASC";
     case "name_desc":
-      return [{ name: "desc" }, { id: "asc" }];
+      return "p.name DESC, p.id ASC";
     default:
-      return [{ createdAt: "desc" }, { id: "desc" }];
+      return "p.created_at DESC, p.id DESC";
   }
+}
+
+interface DecoratedProduct {
+  row: ProductRow;
+  category: CategoryRow | null;
+  images: ProductImageRow[];
+}
+
+/** Attach category and images to raw rows without N+1 queries. */
+async function decorateProducts(rows: ProductRow[]): Promise<DecoratedProduct[]> {
+  if (rows.length === 0) return [];
+
+  const categoryIds = [...new Set(rows.map((row) => row.categoryId))];
+  const [categories, images] = await Promise.all([
+    categoriesByIds(categoryIds),
+    imagesForProductIds(rows.map((row) => row.id)),
+  ]);
+
+  const categoryById = new Map(categories.map((category) => [category.id, category]));
+  const imagesByProduct = new Map<number, ProductImageRow[]>();
+  for (const image of images) {
+    const list = imagesByProduct.get(image.productId);
+    if (list) list.push(image);
+    else imagesByProduct.set(image.productId, [image]);
+  }
+
+  return rows.map((row) => ({
+    row,
+    category: categoryById.get(row.categoryId) ?? null,
+    images: imagesByProduct.get(row.id) ?? [],
+  }));
+}
+
+/** Decorate exactly one row; used where the row is guaranteed to exist. */
+async function decorateOne(row: ProductRow): Promise<DecoratedProduct> {
+  const [decorated] = await decorateProducts([row]);
+  if (!decorated) throw new Error("Product row could not be decorated");
+  return decorated;
+}
+
+function imageItem(image: ProductImageRow) {
+  return {
+    id: image.id,
+    url: image.url,
+    altText: image.altText,
+    isPrimary: image.isPrimary,
+    sortOrder: image.sortOrder,
+  };
+}
+
+/** The admin product shape: every stored column plus category and images. */
+function adminProductItem({ row, category, images }: DecoratedProduct) {
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    sku: row.sku,
+    shortDescription: row.shortDescription,
+    description: row.description,
+    unitLabel: row.unitLabel,
+    price: row.price,
+    compareAtPrice: row.compareAtPrice,
+    stockQuantity: row.stockQuantity,
+    lowStockThreshold: row.lowStockThreshold,
+    allowBackorder: row.allowBackorder,
+    isActive: row.isActive,
+    isFeatured: row.isFeatured,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    categoryId: row.categoryId,
+    deletedAt: row.deletedAt,
+    category: category
+      ? { id: category.id, name: category.name, slug: category.slug, parentId: category.parentId }
+      : null,
+    images: images.map(imageItem),
+  };
 }
 
 /** Storefront listing: active products only, no internal fields. */
 export async function listPublicProducts(
   query: Omit<ListProductsQuery, "status" | "includeDeleted">,
 ): Promise<Paginated<unknown>> {
-  const where = await buildProductWhere({ ...query, status: "active", includeDeleted: false });
+  const { sql, params } = await buildProductWhere({ ...query, status: "active", includeDeleted: false });
   const orderBy = resolveOrderBy(query.sort);
   const skip = (query.page - 1) * query.pageSize;
 
   const [total, rows] = await Promise.all([
-    prisma.product.count({ where }),
-    prisma.product.findMany({
-      where,
-      orderBy,
-      skip,
-      take: query.pageSize,
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        sku: true,
-        shortDescription: true,
-        description: true,
-        unitLabel: true,
-        price: true,
-        compareAtPrice: true,
-        stockQuantity: true,
-        lowStockThreshold: true,
-        allowBackorder: true,
-        isActive: true,
-        isFeatured: true,
-        createdAt: true,
-        category: { select: { id: true, name: true, slug: true } },
-        images: {
-          select: { id: true, url: true, altText: true, isPrimary: true, sortOrder: true },
-          orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-        },
-      },
-    }),
+    countProducts(sql, params),
+    listProductRows(sql, params, orderBy, query.pageSize, skip),
   ]);
 
-  const items = rows.map((product) => ({
-    id: product.id,
-    name: product.name,
-    slug: product.slug,
-    sku: product.sku,
-    shortDescription: product.shortDescription,
-    description: summarise(product.description, 220),
-    unitLabel: product.unitLabel,
-    price: product.price,
-    compareAtPrice: product.compareAtPrice,
-    isOnSale: product.compareAtPrice !== null && product.compareAtPrice > product.price,
-    inStock: isPurchasable(product),
-    stockQuantity: product.stockQuantity,
-    isFeatured: product.isFeatured,
-    category: product.category,
-    images: product.images,
-    primaryImage: product.images.find((image) => image.isPrimary) ?? product.images[0] ?? null,
-  }));
+  const decorated = await decorateProducts(rows);
+  const items = decorated.map((product) => {
+    const { row, category, images } = product;
+    const primary = images.find((image) => image.isPrimary) ?? images[0] ?? null;
+    return {
+      id: row.id,
+      name: row.name,
+      slug: row.slug,
+      sku: row.sku,
+      shortDescription: row.shortDescription,
+      description: summarise(row.description, 220),
+      unitLabel: row.unitLabel,
+      price: row.price,
+      compareAtPrice: row.compareAtPrice,
+      isOnSale: row.compareAtPrice !== null && row.compareAtPrice > row.price,
+      inStock: isPurchasable(row),
+      stockQuantity: row.stockQuantity,
+      isFeatured: row.isFeatured,
+      category: category ? { id: category.id, name: category.name, slug: category.slug } : null,
+      images: images.map(imageItem),
+      primaryImage: primary ? imageItem(primary) : null,
+    };
+  });
 
   return paginate(items, total, query.page, query.pageSize);
 }
 
 export async function getPublicProductBySlug(slug: string) {
-  const product = await prisma.product.findFirst({
-    where: { slug, isActive: true, deletedAt: null },
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      sku: true,
-      shortDescription: true,
-      description: true,
-      unitLabel: true,
-      price: true,
-      compareAtPrice: true,
-      categoryId: true,
-      stockQuantity: true,
-      lowStockThreshold: true,
-      allowBackorder: true,
-      isActive: true,
-      isFeatured: true,
-      createdAt: true,
-      category: { select: { id: true, name: true, slug: true, parentId: true } },
-      images: {
-        select: { id: true, url: true, altText: true, isPrimary: true, sortOrder: true },
-        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-      },
-    },
-  });
+  const row = await findActiveProductBySlug(slug);
+  if (!row) return null;
 
-  if (!product) return null;
+  const decorated = await decorateOne(row);
+  const relatedRows = await listProductRows(
+    "WHERE p.category_id = ? AND p.is_active = 1 AND p.deleted_at IS NULL AND p.id <> ?",
+    [row.categoryId, row.id],
+    "p.is_featured DESC, p.created_at DESC, p.id DESC",
+    4,
+    0,
+  );
+  const related = (await decorateProducts(relatedRows)).map((item) => ({
+    id: item.row.id,
+    name: item.row.name,
+    slug: item.row.slug,
+    price: item.row.price,
+    compareAtPrice: item.row.compareAtPrice,
+    stockQuantity: item.row.stockQuantity,
+    allowBackorder: item.row.allowBackorder,
+    unitLabel: item.row.unitLabel,
+    images: item.images.map(imageItem),
+  }));
 
   return {
-    ...product,
-    isOnSale: product.compareAtPrice !== null && product.compareAtPrice > product.price,
-    inStock: isPurchasable(product),
-    maxQuantity: product.allowBackorder ? 100 : Math.min(product.stockQuantity, 100),
-    related: await relatedProducts(product.id, product.categoryId),
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    sku: row.sku,
+    shortDescription: row.shortDescription,
+    description: row.description,
+    unitLabel: row.unitLabel,
+    price: row.price,
+    compareAtPrice: row.compareAtPrice,
+    categoryId: row.categoryId,
+    stockQuantity: row.stockQuantity,
+    lowStockThreshold: row.lowStockThreshold,
+    allowBackorder: row.allowBackorder,
+    isActive: row.isActive,
+    isFeatured: row.isFeatured,
+    createdAt: row.createdAt,
+    category: decorated.category
+      ? {
+          id: decorated.category.id,
+          name: decorated.category.name,
+          slug: decorated.category.slug,
+          parentId: decorated.category.parentId,
+        }
+      : null,
+    images: decorated.images.map(imageItem),
+    isOnSale: row.compareAtPrice !== null && row.compareAtPrice > row.price,
+    inStock: isPurchasable(row),
+    maxQuantity: row.allowBackorder ? 100 : Math.min(row.stockQuantity, 100),
+    related,
   };
 }
 
-async function relatedProducts(productId: number, categoryId: number) {
-  return prisma.product.findMany({
-    where: { categoryId, isActive: true, deletedAt: null, id: { not: productId } },
-    orderBy: [{ isFeatured: "desc" }, { createdAt: "desc" }],
-    take: 4,
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      price: true,
-      compareAtPrice: true,
-      stockQuantity: true,
-      allowBackorder: true,
-      unitLabel: true,
-      images: {
-        select: { id: true, url: true, altText: true, isPrimary: true, sortOrder: true },
-        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-      },
-    },
-  });
-}
-
 export async function getProductById(id: number) {
-  const product = await prisma.product.findUnique({
-    where: { id },
-    select: {
-      ...adminProductSelect,
-      stockMovements: {
-        orderBy: { createdAt: "desc" },
-        take: 10,
-        select: {
-          id: true,
-          type: true,
-          quantityChange: true,
-          balanceAfter: true,
-          note: true,
-          referenceType: true,
-          createdAt: true,
-          createdBy: { select: { id: true, fullName: true } },
-        },
-      },
-      _count: { select: { orderItems: true, cartItems: true } },
-    },
-  });
-  if (!product || product.deletedAt) throw new NotFoundError("Product");
+  const row = await findProductById(id);
+  if (!row || row.deletedAt) throw new NotFoundError("Product");
+
+  const decorated = await decorateOne(row);
+  const movements = await listStockMovements(id, 10);
+  const adminIds = [
+    ...new Set(
+      movements
+        .map((movement) => movement.createdById)
+        .filter((value): value is number => value !== null),
+    ),
+  ];
+  const admins = await adminsByIds(adminIds);
+  const adminById = new Map(admins.map((admin) => [admin.id, admin]));
+  const counts = await productRefCounts(id);
 
   return {
-    ...product,
-    availability: availabilityOf(product),
-    orderLineCount: product._count.orderItems,
+    ...adminProductItem(decorated),
+    availability: availabilityOf(row),
+    stockMovements: movements.map((movement) => ({
+      id: movement.id,
+      type: movement.type,
+      quantityChange: movement.quantityChange,
+      balanceAfter: movement.balanceAfter,
+      note: movement.note,
+      referenceType: movement.referenceType,
+      createdAt: movement.createdAt,
+      createdBy:
+        movement.createdById !== null ? (adminById.get(movement.createdById) ?? null) : null,
+    })),
+    _count: { orderItems: counts.orderItems, cartItems: counts.cartItems },
+    orderLineCount: counts.orderItems,
   };
 }
 
@@ -494,17 +563,14 @@ export interface CreateProductInput {
 }
 
 export async function createProduct(input: CreateProductInput, adminId: number): Promise<number> {
-  const category = await prisma.category.findUnique({
-    where: { id: input.categoryId },
-    select: { id: true },
-  });
+  const category = await findCategoryById(input.categoryId);
   if (!category) throw new NotFoundError("Category");
 
-  return prisma.$transaction(async (tx) => {
-    const product = await tx.product.create({
-      data: {
+  return transaction(async (tx) => {
+    const productId = await insertProduct(
+      {
         name: input.name,
-        slug: await uniqueSlug(tx.product, input.slug || input.name),
+        slug: await uniqueSlug((slug) => productSlugExists(slug, tx), input.slug || input.name),
         categoryId: input.categoryId,
         sku: input.sku,
         shortDescription: input.shortDescription ?? "",
@@ -516,15 +582,15 @@ export async function createProduct(input: CreateProductInput, adminId: number):
         isActive: input.isActive ?? true,
         isFeatured: input.isFeatured ?? false,
       },
-      select: { id: true },
-    });
+      tx,
+    );
 
     // Opening stock is recorded as a ledger movement, not a bare quantity
     // update, so the opening balance is attributable and auditable.
     if (input.initialStock && input.initialStock > 0) {
-      await tx.stockMovement.create({
-        data: {
-          productId: product.id,
+      await insertStockMovement(
+        {
+          productId,
           type: "PURCHASE",
           quantityChange: input.initialStock,
           balanceAfter: input.initialStock,
@@ -532,79 +598,63 @@ export async function createProduct(input: CreateProductInput, adminId: number):
           note: "Opening stock",
           createdById: adminId,
         },
-      });
-      await tx.product.update({
-        where: { id: product.id },
-        data: { stockQuantity: input.initialStock },
-      });
+        tx,
+      );
+      await updateProductRow(productId, { stockQuantity: input.initialStock }, tx);
     }
 
-    return product.id;
+    return productId;
   });
 }
 
 export async function updateProduct(id: number, input: Partial<CreateProductInput>) {
-  const existing = await prisma.product.findFirst({
-    where: { id, deletedAt: null },
-    select: { id: true },
-  });
-  if (!existing) throw new NotFoundError("Product");
+  const existing = await findProductById(id);
+  if (!existing || existing.deletedAt) throw new NotFoundError("Product");
 
   if (input.categoryId !== undefined) {
-    const category = await prisma.category.findUnique({
-      where: { id: input.categoryId },
-      select: { id: true },
-    });
+    const category = await findCategoryById(input.categoryId);
     if (!category) throw new NotFoundError("Category");
   }
 
   // compareAtPrice below price would advertise a permanent fake discount.
   if (input.compareAtPrice !== undefined && input.compareAtPrice !== null) {
-    const current = await prisma.product.findUniqueOrThrow({ where: { id }, select: { price: true } });
-    const newPrice = input.price ?? current.price;
+    const newPrice = input.price ?? existing.price;
     if (input.compareAtPrice <= newPrice) {
       throw new Error("The compare-at price must be higher than the selling price");
     }
   }
 
-  return prisma.product.update({
-    where: { id },
-    data: {
-      ...(input.name !== undefined ? { name: input.name } : {}),
-      ...(input.slug !== undefined && input.slug ? { slug: input.slug } : {}),
-      ...(input.categoryId !== undefined ? { categoryId: input.categoryId } : {}),
-      ...(input.sku !== undefined ? { sku: input.sku } : {}),
-      ...(input.shortDescription !== undefined ? { shortDescription: input.shortDescription ?? "" } : {}),
-      ...(input.description !== undefined ? { description: input.description ?? "" } : {}),
-      ...(input.unitLabel !== undefined ? { unitLabel: input.unitLabel } : {}),
-      ...(input.price !== undefined ? { price: input.price } : {}),
-      ...(input.compareAtPrice !== undefined ? { compareAtPrice: input.compareAtPrice } : {}),
-      ...(input.lowStockThreshold !== undefined ? { lowStockThreshold: input.lowStockThreshold } : {}),
-      ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
-      ...(input.isFeatured !== undefined ? { isFeatured: input.isFeatured } : {}),
-    },
-    select: adminProductSelect,
-  });
+  const values: Record<string, unknown> = {};
+  if (input.name !== undefined) values.name = input.name;
+  if (input.slug !== undefined && input.slug) values.slug = input.slug;
+  if (input.categoryId !== undefined) values.categoryId = input.categoryId;
+  if (input.sku !== undefined) values.sku = input.sku;
+  if (input.shortDescription !== undefined) values.shortDescription = input.shortDescription ?? "";
+  if (input.description !== undefined) values.description = input.description ?? "";
+  if (input.unitLabel !== undefined) values.unitLabel = input.unitLabel;
+  if (input.price !== undefined) values.price = input.price;
+  if (input.compareAtPrice !== undefined) values.compareAtPrice = input.compareAtPrice;
+  if (input.lowStockThreshold !== undefined) values.lowStockThreshold = input.lowStockThreshold;
+  if (input.isActive !== undefined) values.isActive = input.isActive;
+  if (input.isFeatured !== undefined) values.isFeatured = input.isFeatured;
+
+  const row = await updateProductRow(id, values);
+  const decorated = await decorateOne(row);
+  return adminProductItem(decorated);
 }
 
 export async function setProductActive(id: number, isActive: boolean) {
-  const existing = await prisma.product.findFirst({ where: { id, deletedAt: null }, select: { id: true } });
-  if (!existing) throw new NotFoundError("Product");
-  return prisma.product.update({
-    where: { id },
-    data: { isActive },
-    select: { id: true, isActive: true, name: true },
-  });
+  const existing = await findProductById(id);
+  if (!existing || existing.deletedAt) throw new NotFoundError("Product");
+  const row = await updateProductRow(id, { isActive });
+  return { id: row.id, isActive: row.isActive, name: row.name };
 }
 
 export async function setProductFeatured(id: number, isFeatured: boolean) {
-  const existing = await prisma.product.findFirst({ where: { id, deletedAt: null }, select: { id: true } });
-  if (!existing) throw new NotFoundError("Product");
-  return prisma.product.update({
-    where: { id },
-    data: { isFeatured },
-    select: { id: true, isFeatured: true, name: true },
-  });
+  const existing = await findProductById(id);
+  if (!existing || existing.deletedAt) throw new NotFoundError("Product");
+  const row = await updateProductRow(id, { isFeatured });
+  return { id: row.id, isFeatured: row.isFeatured, name: row.name };
 }
 
 /**
@@ -612,12 +662,12 @@ export async function setProductFeatured(id: number, isFeatured: boolean) {
  * identity rather than depending on this row continuing to exist.
  */
 export async function deleteProduct(id: number) {
-  const existing = await prisma.product.findFirst({ where: { id, deletedAt: null }, select: { id: true } });
-  if (!existing) throw new NotFoundError("Product");
+  const existing = await findProductById(id);
+  if (!existing || existing.deletedAt) throw new NotFoundError("Product");
 
-  await prisma.$transaction(async (tx) => {
-    await tx.product.update({ where: { id }, data: { deletedAt: new Date(), isActive: false } });
-    await tx.cartItem.deleteMany({ where: { productId: id } });
+  await transaction(async (tx) => {
+    await updateProductRow(id, { deletedAt: new Date(), isActive: false }, tx);
+    await deleteCartItemsForProduct(id, tx);
   });
 }
 
@@ -627,59 +677,47 @@ export async function addProductImage(
   productId: number,
   input: { url: string; altText?: string | null; isPrimary?: boolean; sortOrder?: number },
 ) {
-  const product = await prisma.product.findFirst({
-    where: { id: productId, deletedAt: null },
-    select: { id: true },
-  });
-  if (!product) throw new NotFoundError("Product");
+  const product = await findProductById(productId);
+  if (!product || product.deletedAt) throw new NotFoundError("Product");
 
-  return prisma.$transaction(async (tx) => {
+  return transaction(async (tx) => {
     if (input.isPrimary) {
-      await tx.productImage.updateMany({ where: { productId }, data: { isPrimary: false } });
+      await clearPrimaryImages(productId, tx);
     }
-    return tx.productImage.create({
-      data: {
+    return insertProductImage(
+      {
         productId,
         url: input.url,
         altText: input.altText ?? "",
         isPrimary: input.isPrimary ?? false,
         sortOrder: input.sortOrder ?? 0,
       },
-    });
+      tx,
+    );
   });
 }
 
 export async function deleteProductImage(imageId: number) {
-  const image = await prisma.productImage.findUnique({
-    where: { id: imageId },
-    select: { id: true, productId: true, isPrimary: true },
-  });
+  const image = await findProductImage(imageId);
   if (!image) throw new NotFoundError("Image");
 
-  await prisma.$transaction(async (tx) => {
-    await tx.productImage.delete({ where: { id: imageId } });
+  await transaction(async (tx) => {
+    await deleteProductImageRow(imageId, tx);
 
     // Never leave a product with no primary image if the deleted one was it.
     if (image.isPrimary) {
-      const next = await tx.productImage.findFirst({
-        where: { productId: image.productId },
-        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-        select: { id: true },
-      });
+      const next = await findFirstProductImage(image.productId, tx);
       if (next) {
-        await tx.productImage.update({ where: { id: next.id }, data: { isPrimary: true } });
+        await setPrimaryImage(next.id, tx);
       }
     }
   });
 }
 
 export async function reorderProductImages(productId: number, orderedIds: number[]) {
-  await prisma.$transaction(async (tx) => {
+  await transaction(async (tx) => {
     for (const [index, id] of orderedIds.entries()) {
-      await tx.productImage.updateMany({
-        where: { id, productId },
-        data: { sortOrder: index, isPrimary: index === 0 },
-      });
+      await updateImageOrder(id, productId, index, index === 0, tx);
     }
   });
 }
