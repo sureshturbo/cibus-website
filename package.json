@@ -15,6 +15,7 @@
     "dev:api": "npm run dev --workspace @cibus/api",
     "dev:storefront": "npm run dev --workspace @cibus/storefront",
     "build": "npm run build --workspace @cibus/shared && npm run build --workspace @cibus/api && npm run build --workspace @cibus/storefront && npm run build --workspace @cibus/admin",
+    "deploy": "npm run build && npm run prisma:deploy --workspace @cibus/api && npm run prisma:seed --workspace @cibus/api",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
