@@ -2,6 +2,7 @@
   "name": "cibus",
   "private": true,
   "version": "1.0.0",
+  "main": "apps/api/dist/index.js",
   "description": "Cibus Trading e-commerce platform - customer storefront, admin panel, and REST API",
   "workspaces": [
     "apps/*",
@@ -16,6 +17,7 @@
     "dev:storefront": "npm run dev --workspace @cibus/storefront",
     "build": "npm run build --workspace @cibus/shared && npm run build --workspace @cibus/api && npm run build --workspace @cibus/storefront && npm run build --workspace @cibus/admin",
     "deploy": "npm run build && npm run prisma:deploy --workspace @cibus/api && npm run prisma:seed --workspace @cibus/api",
+    "start": "node apps/api/dist/index.js",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
