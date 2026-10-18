@@ -274,6 +274,34 @@ Deploy order on the server (Terminal): `npm install` (runs `prisma generate` on
 Linux via postinstall), `npm run build` (shared → api → storefront → admin), then
 `cd apps/api && npx prisma migrate deploy` and `npx tsx prisma/seed.ts`.
 
+### GoDaddy shared cPanel deploy — gotchas (learned the hard way)
+
+Full runbook: `DEPLOYMENT.md`. The short list of traps:
+
+- **`GOMAXPROCS=1 npm run build` is mandatory on this host.** Without it, `vite
+  build` crashes: `failed to create new OS thread ... errno=11` (esbuild is a Go
+  binary that spawns threads). `tsc` is unaffected. `ulimit -u` is not the cause.
+- **`export NPM_CONFIG_PRODUCTION=false` before `npm install`.** With
+  `NODE_ENV=production`, npm skips devDependencies and the build then fails.
+- **cPanel env vars may not reach the Node process.** The app boots with
+  defaults, `config/env.ts`'s production guard rejects them, and the process
+  exits → every `/api` returns **503 while the website still loads**. Fix: write
+  `apps/api/.env` (the app loads it itself; a real env var still wins).
+- **`/api` returning the SPA HTML instead of JSON = a wrong proxy path.** The
+  `.htaccess` rule lives one folder above the site, so `^(.*)$` forwards
+  `/api/...` as `dev/api/...`. Use `RewriteRule ^dev/(.*)$ http://localhost:4000/$1 [P,L]`.
+  `api.log` shows the received path — check it.
+- **cPanel "Application Manager" / Passenger is a red herring here.** It fails to
+  register (`Invalid configuration for the parameter "ruby"`) and is unused. The
+  working setup is an Apache `.htaccess` reverse proxy + a Node process kept
+  alive by cron (`*/5 * * * * bash ~/cibus-website/keep-api.sh`).
+- **Two copies on the server.** The API runs from `~/cibus-website`; the website
+  is served statically from the docroot (`~/public_html/dev`). They are not
+  linked — re-copy `apps/storefront/dist/.` into the docroot after every build.
+- **cron has no nvm `PATH`** — use the absolute node path in `keep-api.sh`.
+- Prefer **"Setup Node.js App" (Node.js Selector)** over the proxy hack if
+  available; it runs under Passenger and passes env natively.
+
 ## Known pitfalls
 
 - **Basis points.** `BASIS_POINTS_PER_PERCENT` (100) converts a percent figure to
