@@ -4,43 +4,176 @@
 
 /* ------------------------------ hero slider ------------------------------ */
 
+/*
+ * Full-bleed banners. The artwork fills the section and every word sits on top
+ * of it, so contrast comes from the scrim rather than from a card behind the
+ * copy. Slides are stacked and cross-faded; the section owns the height.
+ */
+
 .hero {
   position: relative;
-  background: linear-gradient(120deg, var(--c-wash) 0%, #ffffff 62%);
+  isolation: isolate;
+  min-height: clamp(560px, 74vh, 720px);
+  background: var(--c-ink);
   overflow: hidden;
 }
 
 .hero__slide {
-  display: none;
+  position: absolute;
+  inset: 0;
+  display: flex;
   align-items: center;
-  gap: var(--space-10);
-  min-height: 460px;
-  padding: var(--space-16) 0;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 800ms ease, visibility 800ms;
 }
 
 .hero__slide--active {
-  display: flex;
+  z-index: 1;
+  opacity: 1;
+  visibility: visible;
+}
+
+.hero__bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.04);
+}
+
+.hero__slide--active .hero__bg {
+  animation: hero-pan 9s ease-out both;
+}
+
+@keyframes hero-pan {
+  from {
+    transform: scale(1.1);
+  }
+  to {
+    transform: scale(1.02);
+  }
+}
+
+/*
+ * Copy rises on each slide change. The animation is scoped to the active
+ * slide, so moving the class to another slide restarts the stagger without a
+ * remount or JS timer.
+ */
+.hero__slide--active .hero__eyebrow,
+.hero__slide--active .hero__title,
+.hero__slide--active .hero__sub,
+.hero__slide--active .hero__actions,
+.hero__slide--active .hero__meta {
+  animation: hero-rise 700ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+.hero__slide--active .hero__title {
+  animation-delay: 80ms;
+}
+
+.hero__slide--active .hero__sub {
+  animation-delay: 170ms;
+}
+
+.hero__slide--active .hero__actions {
+  animation-delay: 260ms;
+}
+
+.hero__slide--active .hero__meta {
+  animation-delay: 350ms;
+}
+
+@keyframes hero-rise {
+  from {
+    opacity: 0;
+    transform: translateY(22px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero__slide {
+    transition: none;
+  }
+
+  .hero__slide--active .hero__bg {
+    animation: none;
+    transform: scale(1.02);
+  }
+
+  .hero__slide--active .hero__eyebrow,
+  .hero__slide--active .hero__title,
+  .hero__slide--active .hero__sub,
+  .hero__slide--active .hero__actions,
+  .hero__slide--active .hero__meta {
+    animation: none;
+  }
+}
+
+/* Horizontal scrim for the copy, vertical scrim for the control strip. */
+.hero__scrim {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(7, 24, 12, 0.68) 0%,
+      rgba(7, 24, 12, 0.4) 38%,
+      rgba(7, 24, 12, 0.05) 72%
+    ),
+    linear-gradient(0deg, rgba(7, 24, 12, 0.35) 0%, rgba(7, 24, 12, 0) 42%);
+}
+
+.hero__inner {
+  position: relative;
+  z-index: 2;
+  width: 100%;
 }
 
 .hero__body {
-  max-width: 34rem;
+  max-width: 42rem;
+  padding: var(--space-12) 0;
+  color: #fff;
+}
+
+.hero__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: var(--space-4);
+  padding: 0.35rem 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.12);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  backdrop-filter: blur(6px);
 }
 
 .hero__title {
-  font-size: var(--text-display);
-  line-height: var(--leading-tight);
-  letter-spacing: -0.03em;
+  font-size: clamp(2.1rem, 4.2vw, 3.5rem);
+  line-height: 1.06;
+  letter-spacing: -0.035em;
+  color: #fff;
+  text-wrap: balance;
 }
 
 .hero__title em {
   font-style: normal;
-  color: var(--c-base);
+  color: #8fe0a6;
 }
 
 .hero__sub {
+  max-width: 34rem;
   margin: var(--space-5) 0 var(--space-6);
-  color: var(--c-ink-soft);
-  font-size: var(--text-lg);
+  color: rgba(255, 255, 255, 0.86);
+  font-size: clamp(1rem, 1.4vw, 1.2rem);
 }
 
 .hero__actions {
@@ -49,135 +182,141 @@
   gap: var(--space-3);
 }
 
-.hero__art {
-  flex: 1;
-  min-width: 0;
+.hero .btn--ghost {
+  border-color: rgba(255, 255, 255, 0.65);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
 }
 
-.hero__panel {
-  overflow: hidden;
-  aspect-ratio: 4 / 3;
-  border-radius: var(--radius-image);
-  background: linear-gradient(140deg, var(--c-primary) 0%, var(--c-base) 100%);
-  box-shadow: var(--shadow-md);
+.hero .btn--ghost:hover {
+  border-color: #fff;
+  background: #fff;
+  color: var(--c-base-text);
 }
 
-.hero__panel img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+.hero__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-6);
+  margin-top: var(--space-8);
+  padding-top: var(--space-5);
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.hero__meta li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.hero__meta svg {
+  color: var(--c-primary);
 }
 
 .hero__dots {
   position: absolute;
   bottom: var(--space-6);
   left: 50%;
+  z-index: 3;
   display: flex;
   gap: var(--space-2);
   transform: translateX(-50%);
 }
 
 .hero__dot {
-  width: 8px;
-  height: 8px;
+  width: 9px;
+  height: 9px;
   padding: 0;
   border: 0;
   border-radius: var(--radius-pill);
-  background: var(--c-line);
+  background: rgba(255, 255, 255, 0.45);
   cursor: pointer;
   transition: all var(--t-base);
 }
 
+.hero__dot:hover {
+  background: rgba(255, 255, 255, 0.8);
+}
+
 .hero__dot--active {
-  width: 22px;
-  background: var(--c-base);
+  width: 26px;
+  background: #fff;
 }
 
 @media (max-width: 900px) {
-  .hero__slide {
+  .hero {
     min-height: 0;
-    padding: var(--space-10) 0;
   }
 
-  .hero__art {
+  .hero__slide {
+    position: absolute;
+    inset: 0;
+  }
+
+  .hero__slide--active {
+    position: relative;
+  }
+
+  .hero__scrim {
+    background: linear-gradient(
+      180deg,
+      rgba(7, 24, 12, 0.55) 0%,
+      rgba(7, 24, 12, 0.88) 100%
+    );
+  }
+
+  .hero__body {
+    padding: var(--space-12) 0 var(--space-16);
+  }
+  .hero__meta {
+    gap: var(--space-2) var(--space-4);
+    margin-top: var(--space-6);
+  }
+}
+
+@media (max-width: 560px) {
+  .hero__body {
+    padding: var(--space-10) 0 var(--space-12);
+  }
+
+  .hero__title {
+    font-size: clamp(1.8rem, 8.5vw, 2.3rem);
+  }
+
+  .hero__sub {
+    margin: var(--space-4) 0 var(--space-5);
+  }
+
+  /* The trust bullets are the first thing to go when height is scarce. */
+  .hero__meta {
     display: none;
   }
 }
 
-/* ---------------------------- category tiles ----------------------------- */
-
-.cat-tiles {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: var(--space-5);
-}
-
-.cat-tile {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  aspect-ratio: 3 / 4;
-  padding: var(--space-5);
-  border-radius: var(--radius-image);
-  background: var(--c-wash);
-  overflow: hidden;
-  color: var(--c-ink);
-}
-
-.cat-tile img {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  transition: transform var(--t-base);
-}
-
-.cat-tile:hover img {
-  transform: scale(1.05);
-}
-
-/* Scrim so the label stays readable over any photograph. */
-.cat-tile::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0) 40%, rgba(20, 40, 28, 0.68) 100%);
-}
-
-.cat-tile__label {
-  position: relative;
-  z-index: 1;
-  color: #fff;
-}
-
-.cat-tile__name {
-  font-size: var(--text-base);
-  font-weight: 700;
-}
-
-.cat-tile__count {
-  font-size: var(--text-xs);
-  opacity: 0.85;
-}
-
 /* ----------------------------- promo banners ----------------------------- */
+
+.promo-band {
+  margin: var(--space-8) 0;
+}
 
 .promo-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--space-5);
+  background: transparent;
 }
 
 .promo {
   position: relative;
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   justify-content: flex-end;
-  min-height: 260px;
-  padding: var(--space-8);
+  min-height: 360px;
+  padding: clamp(var(--space-10), 5vw, var(--space-16)) clamp(var(--space-8), 4vw, var(--space-12));
   border-radius: var(--radius-image);
   background: linear-gradient(135deg, var(--c-base) 0%, var(--c-ink) 100%);
   overflow: hidden;
@@ -189,17 +328,22 @@
   content: "";
   position: absolute;
   inset: 0;
-  background-image: url("/images/category.webp");
+  background-image: url("/images/promo-trade.webp");
   background-size: cover;
   background-position: center;
-  transition: transform var(--t-base);
+  transition: transform 600ms ease;
 }
 
 .promo::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(110deg, rgba(13, 40, 20, 0.88) 0%, rgba(13, 40, 20, 0.45) 60%, rgba(13, 40, 20, 0.12) 100%);
+  background: linear-gradient(
+    120deg,
+    rgba(7, 24, 12, 0.7) 0%,
+    rgba(7, 24, 12, 0.42) 55%,
+    rgba(7, 24, 12, 0.08) 100%
+  );
 }
 
 .promo > * {
@@ -208,15 +352,12 @@
 }
 
 .promo:hover::before {
-  transform: scale(1.05);
+  transform: scale(1.06);
 }
 
 .promo--alt::before {
+  background-image: url("/images/promo-fresh.webp");
   background-position: right center;
-}
-
-.promo--alt::after {
-  background: linear-gradient(250deg, rgba(13, 40, 20, 0.88) 0%, rgba(13, 40, 20, 0.45) 60%, rgba(13, 40, 20, 0.12) 100%);
 }
 
 .promo--alt {
@@ -228,14 +369,23 @@
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  opacity: 0.85;
+  opacity: 0.9;
 }
 
 .promo__title {
   max-width: 22ch;
-  margin: var(--space-2) 0 var(--space-4);
-  font-size: var(--text-2xl);
+  margin: var(--space-2) 0 var(--space-3);
+  font-size: clamp(1.5rem, 2.4vw, 2rem);
+  line-height: 1.15;
   color: #fff;
+  text-wrap: balance;
+}
+
+.promo__sub {
+  max-width: 40ch;
+  margin-bottom: var(--space-6);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: var(--text-sm);
 }
 
 .promo .btn {
@@ -251,9 +401,295 @@
   color: var(--c-base);
 }
 
-@media (max-width: 767px) {
+@media (max-width: 900px) {
   .promo-row {
     grid-template-columns: 1fr;
+  }
+
+  .promo {
+    min-height: 300px;
+  }
+}
+
+@media (max-width: 767px) {
+  .promo {
+    min-height: 260px;
+    padding: var(--space-8) var(--space-6);
+  }
+}
+
+/* --------------------------- fresh in store slider ------------------------ */
+
+/*
+ * Right-to-left product marquee. The card list is rendered twice by the
+ * component; the track translates by exactly -50% (one full copy) so the loop
+ * is seamless. Pausing on hover/focus keeps the cards usable.
+ */
+.fresh-slider {
+  position: relative;
+  overflow: hidden;
+  padding-bottom: var(--space-3);
+}
+
+/* Fade layers sit above the cards, below the arrows, so the row appears to run
+   off the edge of the section rather than being clipped mid-card. */
+.fresh-slider::before,
+.fresh-slider::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: var(--space-3);
+  z-index: 2;
+  width: 96px;
+  pointer-events: none;
+}
+
+.fresh-slider::before {
+  left: 0;
+  background: linear-gradient(90deg, var(--c-page, #fff), rgba(255, 255, 255, 0));
+}
+
+.fresh-slider::after {
+  right: 0;
+  background: linear-gradient(270deg, var(--c-page, #fff), rgba(255, 255, 255, 0));
+}
+
+/*
+ * The track is positioned by a requestAnimationFrame loop in the page, not by a
+ * CSS animation: a running animation overrides an inline transform, which would
+ * break the arrow buttons. Only layout lives here.
+ */
+.fresh-track {
+  display: flex;
+  gap: var(--space-4);
+  width: max-content;
+  will-change: transform;
+}
+
+/* --------------------------- fresh slider arrows -------------------------- */
+
+/*
+ * Arrows only exist while the section is engaged: on hover for pointers, and
+ * on keyboard focus so they are reachable without a mouse.
+ */
+.fresh-slider__arrow {
+  position: absolute;
+  top: calc(50% - (var(--space-3) / 2));
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--c-ink);
+  box-shadow: 0 6px 20px rgba(7, 24, 12, 0.22);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-50%) scale(0.9);
+  transition: opacity var(--t-base), transform var(--t-base), background var(--t-base),
+    color var(--t-base);
+}
+
+.fresh-slider__arrow--prev {
+  left: var(--space-4);
+}
+
+.fresh-slider__arrow--next {
+  right: var(--space-4);
+}
+
+.fresh-slider__arrow:hover {
+  background: var(--c-base);
+  color: #fff;
+}
+
+.fresh-slider:hover .fresh-slider__arrow,
+.fresh-slider:focus-within .fresh-slider__arrow {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+}
+
+@media (hover: none) {
+  /* Touch devices never hover, so the arrows stay visible. */
+  .fresh-slider__arrow {
+    opacity: 1;
+    transform: translateY(-50%) scale(1);
+  }
+}
+
+.fresh-track__item {
+  width: 298px;
+  flex: none;
+}
+
+@media (max-width: 1024px) {
+  .fresh-track__item {
+    width: 240px;
+  }
+}
+
+@media (max-width: 767px) {
+  .fresh-track__item {
+    width: 167px;
+  }
+
+  .fresh-slider::before,
+  .fresh-slider::after {
+    width: 48px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The page skips the scroll loop entirely, so the row becomes a manual
+     scroller with the arrows still available. */
+  .fresh-slider {
+    overflow-x: auto;
+  }
+}
+
+/* ------------------------------ product tabs ------------------------------ */
+
+.tabs-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.tabs-bar .tabs {
+  padding-bottom: 2px;
+}
+
+@media (max-width: 767px) {
+  /* Let the strip bleed to the screen edge so the last tab is reachable. */
+  .tabs-bar .tabs {
+    margin-right: calc(var(--gutter) * -1);
+    padding-right: var(--gutter);
+  }
+}
+
+.tab-panel {
+  min-height: 260px;
+}
+
+.tab-panel__status {
+  display: grid;
+  place-items: center;
+  min-height: 260px;
+  margin: 0;
+  padding: var(--space-6);
+  border: 1px dashed var(--c-line);
+  border-radius: var(--radius-image);
+  background: var(--c-line-soft);
+  color: var(--c-ink-soft);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.tab-panel__status a {
+  color: var(--c-base);
+  font-weight: 600;
+}
+
+/* ------------------------------ brand intro ------------------------------ */
+
+.brand-intro {
+  max-width: 44rem;
+  margin: 0 auto var(--space-10);
+  text-align: center;
+}
+
+.brand-intro .eyebrow {
+  margin-bottom: var(--space-2);
+}
+
+.brand-intro .lede {
+  margin-top: var(--space-3);
+}
+
+/* -------------------------------- CTA band ------------------------------- */
+
+.cta-band {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  min-height: clamp(340px, 38vw, 480px);
+  margin-top: var(--space-10);
+  padding: var(--space-16) 0;
+  background: var(--c-ink) url("/images/feature.webp") center / cover no-repeat;
+  color: #fff;
+  overflow: hidden;
+}
+
+.cta-band::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(180deg, rgba(7, 24, 12, 0.72) 0%, rgba(7, 24, 12, 0.9) 100%);
+}
+
+.cta-band__inner {
+  max-width: 46rem;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.cta-band__eyebrow {
+  margin-bottom: var(--space-3);
+  color: #8fe0a6;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.cta-band__title {
+  color: #fff;
+  font-size: clamp(2rem, 4vw, 3rem);
+  line-height: 1.08;
+  text-wrap: balance;
+}
+
+.cta-band__sub {
+  max-width: 38rem;
+  margin: var(--space-4) auto var(--space-8);
+  color: rgba(255, 255, 255, 0.86);
+  font-size: var(--text-lg);
+}
+
+.cta-band__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-3);
+}
+
+.cta-band .btn--ghost {
+  border-color: rgba(255, 255, 255, 0.65);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.cta-band .btn--ghost:hover {
+  border-color: #fff;
+  background: #fff;
+  color: var(--c-base-text);
+}
+
+@media (max-width: 767px) {
+  .cta-band {
+    min-height: 380px;
+    padding: var(--space-12) 0;
+  }
+
+  .cta-band__sub {
+    font-size: var(--text-base);
   }
 }
 

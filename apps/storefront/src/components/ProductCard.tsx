@@ -53,7 +53,16 @@ function Card({
 
   return (
     <article className="card">
-      <div className="card__media">
+      {/*
+        The media block is itself a link so clicking the photograph opens the
+        product. The overlay controls (view, add to cart) sit above it and keep
+        their own handlers.
+      */}
+      <Link
+        to={`/product/${data.slug}`}
+        className="card__media"
+        aria-label={`View ${data.name}`}
+      >
         {image && !failed ? (
           <img
             className="card__img"
@@ -72,31 +81,31 @@ function Card({
           {percent ? <span className="badge badge--sale">-{percent}%</span> : null}
           {!data.inStock ? <span className="badge badge--out">Sold out</span> : null}
         </div>
+      </Link>
 
-        <div className="card__tools">
-          <Link
-            to={`/product/${data.slug}`}
-            className="icon-btn icon-btn--on-media"
-            aria-label={`View ${data.name}`}
-          >
-            <Icon name="eye" size={17} />
-          </Link>
-        </div>
-
-        {onAdd && data.inStock ? (
-          <div className="card__atc">
-            <button
-              type="button"
-              className="icon-btn icon-btn--primary"
-              aria-label={`Add ${data.name} to cart`}
-              disabled={adding}
-              onClick={onAdd}
-            >
-              <Icon name="cart" size={17} />
-            </button>
-          </div>
-        ) : null}
+      <div className="card__tools">
+        <Link
+          to={`/product/${data.slug}`}
+          className="icon-btn icon-btn--on-media"
+          aria-label={`View ${data.name}`}
+        >
+          <Icon name="eye" size={17} />
+        </Link>
       </div>
+
+      {onAdd && data.inStock ? (
+        <div className="card__atc">
+          <button
+            type="button"
+            className="icon-btn icon-btn--primary"
+            aria-label={`Add ${data.name} to cart`}
+            disabled={adding}
+            onClick={onAdd}
+          >
+            <Icon name="cart" size={17} />
+          </button>
+        </div>
+      ) : null}
 
       <div className="card__body">
         {data.categoryName ? <span className="card__category">{data.categoryName}</span> : null}

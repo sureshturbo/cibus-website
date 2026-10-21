@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import Icon from "../Icon.js";
+import { BRAND_LOGO } from "../../api.js";
 import { useCart } from "../../context/CartContext.js";
 import { useUi } from "../../context/UiContext.js";
 import { useAuth } from "../../context/AuthContext.js";
@@ -77,10 +78,13 @@ function DesktopHeader() {
       <div className="header-main">
         <div className="container header-main__inner">
           <Link to="/" className="brand" aria-label={`${company?.name ?? "Cibus Trading"} home`}>
-            <span className="brand__mark">
-              Cibus<em>Trading</em>
-            </span>
-            <span className="brand__tagline">{company?.tagline ?? "Quality provisions"}</span>
+            <img
+              className="brand__logo"
+              src={BRAND_LOGO}
+              alt={company?.name ?? "Cibus Trading"}
+              width={480}
+              height={431}
+            />
           </Link>
 
           <nav className="header-main__nav" aria-label="Main navigation">
@@ -142,9 +146,13 @@ function MobileHeader() {
       </button>
 
       <Link to="/" className="brand" aria-label={`${company?.name ?? "Cibus Trading"} home`}>
-        <span className="brand__mark">
-          Cibus<em>Trading</em>
-        </span>
+        <img
+          className="brand__logo"
+          src={BRAND_LOGO}
+          alt={company?.name ?? "Cibus Trading"}
+          width={480}
+          height={431}
+        />
       </Link>
 
       <div className="mobile-header__actions">

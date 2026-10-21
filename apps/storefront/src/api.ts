@@ -219,6 +219,23 @@ export const PLACEHOLDER_IMAGES = {
   feature: "/images/feature.webp",
 } as const;
 
+/**
+ * Homepage hero banners, in slide order. Kept together so the slider and any
+ * future CMS mapping have a single list to read from.
+ */
+export const HERO_BANNERS = [
+  "/images/banner1.webp",
+  "/images/banner2.webp",
+  "/images/banner3.webp",
+  "/images/banner4.webp",
+] as const;
+
+/**
+ * The supplied artwork is a self-contained badge (frame, mark and wordmark), so
+ * it is rendered on its own rather than alongside the text lockup.
+ */
+export const BRAND_LOGO = "/images/logo.webp";
+
 export function primaryImageOf(
   product: { images: ProductImage[]; primaryImage?: ProductImage | null },
 ): ProductImage | null {

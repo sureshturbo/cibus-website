@@ -492,25 +492,25 @@
 .hero__nav {
   position: absolute;
   top: 50%;
+  z-index: 3;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
-  border: 1px solid var(--c-line);
+  width: 46px;
+  height: 46px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
   border-radius: var(--radius-pill);
-  background: #fff;
-  color: var(--c-ink);
-  box-shadow: var(--shadow-sm);
+  background: rgba(7, 24, 12, 0.35);
+  color: #fff;
+  backdrop-filter: blur(6px);
   transform: translateY(-50%);
   transition: all var(--t-fast);
-  z-index: 2;
 }
 
 .hero__nav:hover {
-  background: var(--c-base);
-  border-color: var(--c-base);
-  color: #fff;
+  background: #fff;
+  border-color: #fff;
+  color: var(--c-base-text);
 }
 
 .hero__nav--prev {

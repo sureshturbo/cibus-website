@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import Icon from "./../Icon.js";
 import type { IconName } from "./../Icon.js";
+import { BRAND_LOGO } from "../../api.js";
 import { useUi } from "../../context/UiContext.js";
 
 const SOCIAL_ICONS: Record<string, IconName> = {
@@ -20,10 +21,14 @@ export default function Footer() {
     <footer className="site-footer">
       <div className="container footer__cols">
         <div>
-          <Link to="/" className="brand">
-            <span className="brand__mark">
-              Cibus<em>Trading</em>
-            </span>
+          <Link to="/" className="brand" aria-label="Cibus Trading home">
+            <img
+              className="brand__logo"
+              src={BRAND_LOGO}
+              alt={company?.name ?? "Cibus Trading"}
+              width={480}
+              height={431}
+            />
             <span className="brand__tagline">{company?.tagline ?? "Quality provisions"}</span>
           </Link>
 

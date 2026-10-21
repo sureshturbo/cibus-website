@@ -96,16 +96,11 @@
   color: var(--c-ink-header);
 }
 
-.brand__mark {
-  font-size: 1.5rem;
-  font-weight: 800;
-  letter-spacing: -0.03em;
-  line-height: 1.1;
-}
-
-.brand__mark em {
-  font-style: normal;
-  color: var(--c-base);
+.brand__logo {
+  display: block;
+  width: auto;
+  height: var(--logo-desktop);
+  object-fit: contain;
 }
 
 .brand__tagline {
@@ -279,6 +274,10 @@
   display: flex;
   align-items: center;
   gap: var(--space-1);
+}
+
+.mobile-header .brand__logo {
+  height: var(--logo-mobile);
 }
 
 @media (min-width: 1200px) {
@@ -457,6 +456,14 @@
 .site-footer {
   margin-top: var(--space-20);
   border-top: 1px solid var(--c-line);
+}
+
+.site-footer .brand__logo {
+  height: 72px;
+}
+
+.site-footer .brand__tagline {
+  margin-top: var(--space-2);
 }
 
 .footer__cols {
