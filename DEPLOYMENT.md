@@ -86,11 +86,19 @@ git reset --hard origin/main
 cd ~/cibus-website
 export NPM_CONFIG_PRODUCTION=false     # MUST: NODE_ENV=production otherwise skips devDeps
 npm install
-GOMAXPROCS=1 npm run build             # MUST: without GOMAXPROCS=1 esbuild crashes (see §6)
 ```
 
-Build order is automatic and is `shared → api → storefront → admin`.
-The API entry is produced at `apps/api/dist/index.js`.
+**Do not build the UIs on the server.** The host's container (CloudLinux
+cgroup/LVE) caps tasks at ~4, so esbuild cannot spawn and every `vite build`
+dies (see §6.3). `tsc` is fine, so the API and shared DO build here:
+
+```bash
+npm run build --workspace @cibus/shared
+npm run build --workspace @cibus/api
+```
+
+Build `apps/storefront` and `apps/admin` **on your workstation**, then upload
+the `dist/` output (§4.5).
 
 ### 4.3 Create the API settings file
 
@@ -138,13 +146,28 @@ cPanel → **phpMyAdmin** → select the database → **Import** → `cibus-setu
 ### 4.5 Publish the website files
 
 The docroot (`~/public_html/dev`) serves the storefront as static files, so copy
-the fresh build there:
+the fresh build there. The build is produced on your workstation (§4.2) and
+transferred as a forward-slash tarball:
 
 ```bash
-cp -a ~/cibus-website/apps/storefront/dist/. ~/public_html/dev/
+cd ~/public_html/dev
+rm -rf assets images index.html favicon.png apple-touch-icon.png
+tar -xzf ~/storefront-dist.tar.gz
 ```
 
-(The admin UI is served by the API from `ADMIN_DIR`, so it needs no copy.)
+> The docroot also contains a hand-made ~26 KB `index.html` that is NOT the React
+> app. The React shell is ~1 KB — if `/` is not the SPA, the build was never
+> published. Keep the old docroot `.env`/`.htaccess`; only the built files are
+> replaced.
+
+The admin UI is served by the API from `ADMIN_DIR`, so it goes to
+`~/cibus-website/apps/admin/dist` (not the docroot):
+
+```bash
+mkdir -p ~/cibus-website/apps/admin/dist
+cd ~/cibus-website/apps/admin/dist
+tar -xzf ~/admin-dist.tar.gz
+```
 
 ### 4.6 Proxy `/api` and `/health` to the Node process
 
@@ -218,8 +241,27 @@ the production guard aborted the boot. Fix: `apps/api/.env` (§4.3).
 
 ### 6.3 Build failed: `failed to create new OS thread ... errno=11`
 `vite build` uses **esbuild**, a Go binary that spawns threads; on this host it
-can't. `tsc` (Node) builds fine. **Fix: `GOMAXPROCS=1 npm run build`.**
-Raising `ulimit -u` did **not** help (it was already huge). Always prefix builds.
+cannot, because the account's **cgroup/LVE caps tasks at ~4**. Symptoms are
+interchangeable: `failed to create new OS thread (have 4 already; errno=11)`,
+`spawn .../esbuild EAGAIN`, or `pthread_create: Resource temporarily
+unavailable`. **`GOMAXPROCS=1` and `ESBUILD_WORKER_THREADS=0` do NOT fix it**,
+and neither does `ulimit -u` — it already reads 287658, because a cgroup limit is
+not a shell limit. `tsc` (Node) builds fine.
+
+**Fix: build the UIs on your workstation and upload `dist/`.**
+```bash
+# on the workstation, in apps/storefront and apps/admin:
+npm.cmd run build
+# package with forward-slash paths (PowerShell's Compress-Archive writes
+# backslashes, which Linux unzip renders as literal "assets\file" names):
+tar.exe -czf storefront-dist.tar.gz -C apps/storefront/dist .
+scp storefront-dist.tar.gz user@host:~/storefront-dist.tar.gz
+# on the server:
+cd ~/public_html/dev && tar -xzf ~/storefront-dist.tar.gz
+```
+Converting a PuTTY `.ppk` for the workstation's OpenSSH `scp`: no `puttygen`/
+`pscp` is installed, so convert the key (it is a plain RSA key when
+`Encryption: none`) or add it via cPanel → SSH Access.
 
 ### 6.4 `/api` returned the website's HTML instead of JSON
 The proxy rule lived in `~/public_html/.htaccess` (a folder *above* the `dev`
@@ -271,8 +313,11 @@ cd ~/cibus-website
 git fetch origin && git reset --hard origin/main
 export NPM_CONFIG_PRODUCTION=false
 npm install
-GOMAXPROCS=1 npm run build
-cp -a apps/storefront/dist/. ~/public_html/dev/
+# API + shared build here; the UIs CANNOT (esbuild cgroup cap — build them on a
+# workstation and upload the tarballs, see §4.5 / §6.3):
+npm run build --workspace @cibus/shared
+npm run build --workspace @cibus/api
+cd ~/public_html/dev && tar -xzf ~/storefront-dist.tar.gz
 bash ~/cibus-website/keep-api.sh
 
 # Restart the API (cron also revives it within 5 min)
@@ -290,6 +335,7 @@ curl -k https://dev.cibus.gy/health/ready
 | `/api` → 503, site loads | API process not running | `bash ~/cibus-website/keep-api.sh` |
 | `/api` → 503 and `api.log` empty | env/DB wrong | check `apps/api/.env`, `timeout 15 node apps/api/dist/index.js` |
 | `/api` → HTML, not JSON | proxy path wrong | fix `~/public_html/.htaccess` pattern |
-| Build dies: `new OS thread` | esbuild | `GOMAXPROCS=1 npm run build` |
+| Build dies: `new OS thread` / esbuild `EAGAIN` | esbuild blocked by cgroup task cap | build the UIs on a workstation, upload `dist/` (§6.3) |
 | Install skips dev deps | `NODE_ENV=production` | `export NPM_CONFIG_PRODUCTION=false` |
-| Website looks stale | docroot copy not refreshed | `cp -a apps/storefront/dist/. ~/public_html/dev/` |
+| Website looks stale | docroot copy not refreshed | re-extract the storefront tarball into `~/public_html/dev` |
+| `/` shows a 26 KB page, not the app | old hand-made `index.html` still in docroot | extract the storefront build over it |

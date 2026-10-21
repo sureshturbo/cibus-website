@@ -24,11 +24,10 @@ either without asking.
 | `apps/api` | Implemented, boots, typechecks. Zero automated tests. |
 | `packages/shared` | Implemented. Pure functions and Zod schemas. Zero tests. |
 | `apps/storefront` | Implemented and builds. Zero automated tests. |
-| `apps/admin` | Not started. |
+| `apps/admin` | Implemented (Dashboard, Products, Categories, Orders, Enquiries, Login) and builds. Zero automated tests. |
 
-`apps/admin` is named in the root `package.json` scripts but does not exist, so the
-root `npm run dev` and `npm run build` still fail. Run the API and storefront
-directly (see Commands).
+All four workspaces exist, so `npm run build` at the root now runs
+`shared → api → storefront → admin` end to end.
 
 ## Commands
 
@@ -51,7 +50,7 @@ npx.cmd tsc -p tsconfig.json --noEmit    # typecheck
 npm.cmd run build                        # tsc then vite build
 node scripts/check-classes.mjs src       # class audit: every used class must be defined
 
-# Root (types/build across workspaces; build fails while admin is missing)
+# Root (types/build across all workspaces)
 npm.cmd run typecheck
 ```
 
@@ -278,11 +277,27 @@ Linux via postinstall), `npm run build` (shared → api → storefront → admin
 
 Full runbook: `DEPLOYMENT.md`. The short list of traps:
 
-- **`GOMAXPROCS=1 npm run build` is mandatory on this host.** Without it, `vite
-  build` crashes: `failed to create new OS thread ... errno=11` (esbuild is a Go
-  binary that spawns threads). `tsc` is unaffected. `ulimit -u` is not the cause.
+- **NEVER build on this server — build locally and upload the output.** The
+  host's container (CloudLinux cgroup/LVE) caps *tasks* at ~4, so esbuild cannot
+  spawn and **every** `vite build` dies: `failed to create new OS thread (have 4
+  already; errno=11)`, `spawn .../esbuild EAGAIN`, or `pthread_create: Resource
+  temporarily unavailable`. `GOMAXPROCS=1`, `ESBUILD_WORKER_THREADS=0`, and
+  raising `ulimit -u` (it already reads 287658!) do **not** help — a cgroup limit
+  is not a shell limit. `tsc` is unaffected, so the API/shared DO build on the
+  server. Workflow that works:
+  1. Build locally: `npm.cmd run build` in `apps/storefront` and `apps/admin`.
+  2. Package with forward-slash paths. PowerShell's `Compress-Archive` writes
+     backslashes, which Linux `unzip` turns into literal `assets\file` names —
+     use `tar.exe -czf out.tar.gz -C <dist> .` instead.
+  3. `scp` the tarball up and `tar -xzf` it into `~/public_html/dev` (storefront)
+     and `~/cibus-website/apps/admin/dist` (admin).
+  No `pscp`/`puttygen` is installed on the workstation; the OpenSSH `ssh`/`scp`
+  are (`C:\Windows\System32\OpenSSH`), so an `.ppk` must be converted to OpenSSH
+  format first.
 - **`export NPM_CONFIG_PRODUCTION=false` before `npm install`.** With
   `NODE_ENV=production`, npm skips devDependencies and the build then fails.
+  (`prisma generate` is NOT part of install any more — it was removed because it
+  also crashes esbuild. The API uses `mysql2`, not `@prisma/client`, at runtime.)
 - **cPanel env vars may not reach the Node process.** The app boots with
   defaults, `config/env.ts`'s production guard rejects them, and the process
   exits → every `/api` returns **503 while the website still loads**. Fix: write
@@ -297,7 +312,10 @@ Full runbook: `DEPLOYMENT.md`. The short list of traps:
   alive by cron (`*/5 * * * * bash ~/cibus-website/keep-api.sh`).
 - **Two copies on the server.** The API runs from `~/cibus-website`; the website
   is served statically from the docroot (`~/public_html/dev`). They are not
-  linked — re-copy `apps/storefront/dist/.` into the docroot after every build.
+  linked — re-copy the built storefront into the docroot after every build.
+- **The docroot already has a hand-made 26 KB `index.html`.** It is NOT the React
+  app. If `/` is not the SPA, the build was never published there; the React
+  `index.html` is ~1 KB.
 - **cron has no nvm `PATH`** — use the absolute node path in `keep-api.sh`.
 - Prefer **"Setup Node.js App" (Node.js Selector)** over the proxy hack if
   available; it runs under Passenger and passes env natively.
