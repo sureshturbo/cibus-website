@@ -62,6 +62,38 @@ function HeaderActions() {
   );
 }
 
+function CampaignMarquee({ paymentEnabled }: { paymentEnabled: boolean }) {
+  const messages = [
+    paymentEnabled
+      ? "Secure online payment available"
+      : "Payment is arranged when we confirm your order",
+    "Every order is reviewed by our team before confirmation",
+    "Tattva masalas and whole spices, product of India",
+    "Dhanyasri pickles, pastes and appalam now available",
+  ];
+
+  // The loop slides by exactly one group's width, so the second copy must be
+  // identical; it is hidden from assistive tech so messages are read once.
+  const group = (hidden: boolean) => (
+    <ul className="campaign-bar__group" aria-hidden={hidden || undefined}>
+      {messages.map((message) => (
+        <li key={message} className="campaign-bar__item">
+          {message}
+        </li>
+      ))}
+    </ul>
+  );
+
+  return (
+    <div className="campaign-bar campaign-bar--marquee">
+      <div className="campaign-bar__track">
+        {group(false)}
+        {group(true)}
+      </div>
+    </div>
+  );
+}
+
 /** Header tiers, collapsing the top two rows once the page is scrolled. */
 function DesktopHeader() {
   const { config, categories } = useUi();
@@ -69,11 +101,7 @@ function DesktopHeader() {
 
   return (
     <>
-      <div className="campaign-bar">
-        {config?.paymentEnabled
-          ? "Secure online payment available"
-          : "Payment is arranged when we confirm your order"}
-      </div>
+      <CampaignMarquee paymentEnabled={Boolean(config?.paymentEnabled)} />
 
       <div className="header-main">
         <div className="container header-main__inner">

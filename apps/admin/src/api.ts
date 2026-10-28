@@ -135,6 +135,9 @@ export const adminApi = {
       body: JSON.stringify(input),
     }).then((r) => r.product),
 
+  product: (id: number) =>
+    request<{ product: AdminProduct }>(`/api/admin/products/${id}`).then((r) => r.product),
+
   uploadProductImage: (productId: number, file: File, altText = "") => {
     const body = new FormData();
     body.append("file", file);
@@ -144,6 +147,18 @@ export const adminApi = {
       body,
     }).then((r) => r.image);
   },
+
+  linkProductImage: (productId: number, input: { url: string; altText?: string }) =>
+    request<{ image: AdminProductImage }>(`/api/admin/products/${productId}/images/link`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }).then((r) => r.image),
+
+  reorderProductImages: (productId: number, orderedIds: number[]) =>
+    request<{ reordered: boolean }>(`/api/admin/products/${productId}/images/reorder`, {
+      method: "POST",
+      body: JSON.stringify({ orderedIds }),
+    }),
 
   deleteProductImage: (imageId: number) =>
     request<{ deleted: boolean }>(`/api/admin/images/${imageId}`, { method: "DELETE" }),

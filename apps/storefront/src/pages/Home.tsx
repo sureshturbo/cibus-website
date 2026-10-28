@@ -217,19 +217,15 @@ function PopularProducts({
   onAdd: (product: Product) => void;
 }) {
   const tabs = useMemo<ProductTab[]>(() => {
-    const list: ProductTab[] = [
-      { key: "featured", label: "Featured" },
-      { key: "new", label: "New arrivals" },
-    ];
+    const list: ProductTab[] = [{ key: "new", label: "New arrivals" }];
     for (const category of categories) {
       list.push({ key: `cat:${category.slug}`, label: category.name, slug: category.slug });
     }
     return list;
   }, [categories]);
 
-  const [active, setActive] = useState("featured");
+  const [active, setActive] = useState("new");
   const [cache, setCache] = useState<Record<string, Product[]>>({
-    featured: pricedOnly(payload.featuredProducts),
     new: pricedOnly(payload.newestProducts),
   });
   const [loading, setLoading] = useState(false);
@@ -340,9 +336,11 @@ function PopularProducts({
               </button>
             </div>
           ) : loading && items.length === 0 ? (
-            <p className="tab-panel__status" role="status">
-              Loading products&hellip;
-            </p>
+            <div className="grid-loader" aria-busy="true" aria-label="Loading products">
+              {Array.from({ length: 8 }, (_, index) => (
+                <div key={index} className="skeleton-card" />
+              ))}
+            </div>
           ) : items.length === 0 ? (
             <p className="tab-panel__status">
               Nothing in this collection yet.{" "}
@@ -507,7 +505,17 @@ export default function Home() {
     );
   }
 
-  if (!payload) return <div className="container section" aria-busy="true" />;
+  if (!payload) {
+    return (
+      <div className="container section" aria-busy="true" aria-label="Loading storefront">
+        <div className="grid-loader">
+          {Array.from({ length: 8 }, (_, index) => (
+            <div key={index} className="skeleton-card" />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   const fresh = pricedOnly(payload.newestProducts);
 

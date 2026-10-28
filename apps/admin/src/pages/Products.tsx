@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import { adminApi, formatMoney } from "../api.js";
 import type { AdminCategory, AdminProduct, AdminProductImage, ProductInput } from "../types.js";
 import { Panel } from "../App.js";
+import ImageManager from "../components/ImageManager.js";
 
 /**
  * Form state, kept separate from ProductInput: numeric and money fields are held
@@ -102,7 +103,8 @@ export default function Products() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [images, setImages] = useState<AdminProductImage[]>([]);
-  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [stagedImages, setStagedImages] = useState<File[]>([]);
+  const [imageOpen, setImageOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   // While true the SKU tracks the name; a manual edit flips it off so an
   // operator's own SKU is never overwritten by a later name change.
@@ -180,7 +182,8 @@ export default function Products() {
     setSkuAuto(true);
     setDraft({ ...EMPTY_DRAFT, sku: buildSku("", suffix) });
     setImages([]);
-    setImageFile(null);
+    setStagedImages([]);
+    setImageOpen(false);
     setError(null);
   };
 
@@ -203,7 +206,8 @@ export default function Products() {
       isFeatured: product.isFeatured,
     });
     setImages(product.images ?? []);
-    setImageFile(null);
+    setStagedImages([]);
+    setImageOpen(false);
     setError(null);
   };
 
@@ -211,7 +215,8 @@ export default function Products() {
     setDraft(null);
     setEditingId(null);
     setImages([]);
-    setImageFile(null);
+    setStagedImages([]);
+    setImageOpen(false);
     setSkuAuto(false);
   };
 
@@ -239,11 +244,19 @@ export default function Products() {
     try {
       if (editingId === null) {
         const created = await adminApi.createProduct({ ...payload, initialStock: Number(draft.initialStock) });
-        // The image route needs a product id, so the upload follows the create.
-        if (imageFile) await adminApi.uploadProductImage(created.id, imageFile);
+        // The image route needs a product id, so staged files upload after the
+        // create. Reordering persists the selection order and makes the first
+        // one the cover.
+        if (stagedImages.length > 0) {
+          const ids: number[] = [];
+          for (const file of stagedImages) {
+            const uploaded = await adminApi.uploadProductImage(created.id, file, payload.name);
+            ids.push(uploaded.id);
+          }
+          await adminApi.reorderProductImages(created.id, ids);
+        }
       } else {
         await adminApi.updateProduct(editingId, payload);
-        if (imageFile) await adminApi.uploadProductImage(editingId, imageFile);
       }
       closeForm();
       await load();
@@ -286,6 +299,7 @@ export default function Products() {
         <button type="button" className="button" onClick={startCreate} disabled={draft !== null && editingId === null}>
           Add product
         </button>
+        <button type="button" className="button" onClick={() => setImageOpen(true)}>Manage images</button>
         <span className="hint">
           {visible.length} shown · {total} total
         </span>
@@ -379,8 +393,6 @@ export default function Products() {
                 value={draft.unitLabel}
                 onChange={(event) => setDraft({ ...draft, unitLabel: event.target.value })}
               >
-                {/* Keep a value that predates the dropdown (e.g. "1 L") selectable,
-                    so editing other fields does not silently rewrite the unit. */}
                 {!UNIT_OPTIONS.includes(draft.unitLabel) ? (
                   <option value={draft.unitLabel}>{draft.unitLabel} (current)</option>
                 ) : null}
@@ -469,15 +481,6 @@ export default function Products() {
                 maxLength={20000}
                 value={draft.description}
                 onChange={(event) => setDraft({ ...draft, description: event.target.value })}
-              />
-            </label>
-
-            <label className="wide">
-              <span>Product image</span>
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp,image/avif"
-                onChange={(event) => setImageFile(event.target.files?.[0] ?? null)}
               />
             </label>
 
@@ -597,6 +600,18 @@ export default function Products() {
         </table>
         {visible.length === 0 ? <p className="empty">No products match that filter.</p> : null}
       </Panel>
+
+      <ImageManager
+        open={imageOpen}
+        productId={editingId}
+        productName={draft?.name ?? ""}
+        images={images}
+        staged={stagedImages}
+        onClose={() => setImageOpen(false)}
+        onImagesChange={setImages}
+        onStagedChange={setStagedImages}
+        onError={setError}
+      />
     </>
   );
 }

@@ -22,6 +22,63 @@
   text-align: center;
 }
 
+.campaign-bar--marquee {
+  justify-content: flex-start;
+  padding-inline: 0;
+  overflow: hidden;
+}
+
+.campaign-bar__track {
+  display: flex;
+  width: max-content;
+  animation: campaign-marquee 40s linear infinite;
+}
+
+.campaign-bar--marquee:hover .campaign-bar__track {
+  animation-play-state: paused;
+}
+
+/* Each copy is at least a viewport wide so a short message list never leaves
+   a gap on wide screens before the second copy scrolls in. */
+.campaign-bar__group {
+  display: flex;
+  flex: none;
+  justify-content: space-around;
+  min-width: 100vw;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.campaign-bar__item {
+  display: flex;
+  align-items: center;
+  padding-inline: var(--space-8);
+  white-space: nowrap;
+}
+
+.campaign-bar__item::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin-right: var(--space-8);
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  opacity: 0.6;
+}
+
+@keyframes campaign-marquee {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .campaign-bar__track {
+    animation: none;
+  }
+}
+
 .campaign-bar__close {
   position: absolute;
   right: 8px;
