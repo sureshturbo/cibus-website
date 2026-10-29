@@ -15,9 +15,11 @@ export const publicRouter = Router();
 publicRouter.get(
   "/home",
   controller(async (_req, res) => {
-    const [featured, newest] = await Promise.all([
+    // The shelf rail follows the catalogue's own category order, so it opens on
+    // the first category rather than on whatever was imported last.
+    const [featured, shelf] = await Promise.all([
       listPublicProducts({ featured: true, page: 1, pageSize: 8, sort: "newest" }),
-      listPublicProducts({ page: 1, pageSize: 4, sort: "newest" }),
+      listPublicProducts({ page: 1, pageSize: 24, sort: "catalogue" }),
     ]);
 
     sendOk(res, {
@@ -26,7 +28,7 @@ publicRouter.get(
       highlights: HOME_CONTENT.highlights,
       categoriesBlurb: HOME_CONTENT.categoriesBlurb,
       featuredProducts: featured.items,
-      newestProducts: newest.items,
+      shelfProducts: shelf.items,
       pages: Object.values(STATIC_PAGES).map((page) => ({
         slug: page.slug,
         title: page.title,

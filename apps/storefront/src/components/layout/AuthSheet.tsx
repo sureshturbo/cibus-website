@@ -246,10 +246,10 @@ export function MenuSheet({
           <Icon name="info" size={18} />
           About Us
         </Link>
-        <a href="#contact" onClick={onClose}>
+        <Link to="/contact" onClick={onClose}>
           <Icon name="phone" size={18} />
           Contact Us
-        </a>
+        </Link>
       </nav>
     </Sheet>
   );

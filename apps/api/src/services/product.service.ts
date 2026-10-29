@@ -221,7 +221,8 @@ export interface ListProductsQuery {
   categoryId?: number;
   categorySlug?: string;
   search?: string;
-  sort?: "newest" | "price_asc" | "price_desc" | "name_asc" | "name_desc";
+  /** `catalogue` is internal (not in the public query schema): shelf order by category, then SKU. */
+  sort?: "newest" | "price_asc" | "price_desc" | "name_asc" | "name_desc" | "catalogue";
   inStock?: boolean;
   featured?: boolean;
   status?: "all" | "active" | "inactive" | "low_stock" | "out_of_stock";
@@ -332,6 +333,8 @@ function resolveOrderBy(sort: ListProductsQuery["sort"]): string {
       return "p.name ASC, p.id ASC";
     case "name_desc":
       return "p.name DESC, p.id ASC";
+    case "catalogue":
+      return "(SELECT c.sort_order FROM categories c WHERE c.id = p.category_id) ASC, p.sku ASC, p.id ASC";
     default:
       return "p.created_at DESC, p.id DESC";
   }

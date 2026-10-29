@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import Icon from "../components/Icon.js";
+import PageHero from "../components/layout/PageHero.js";
 import { api } from "../api.js";
 import type { StaticPage } from "../types.js";
 
@@ -42,17 +43,7 @@ export default function StaticPageView() {
 
   return (
     <>
-      <div className="page-head">
-        <div className="container">
-          <nav className="breadcrumbs" aria-label="Breadcrumb">
-            <Link to="/">Home</Link>
-            <Icon name="chevronRight" size={14} />
-            <span>{page.title}</span>
-          </nav>
-          <h1 className="page-head__title">{page.title}</h1>
-          {page.subtitle ? <p className="page-subtitle">{page.subtitle}</p> : null}
-        </div>
-      </div>
+      <PageHero slug={page.slug} title={page.title} subtitle={page.subtitle} />
 
       <div className="container section">
         {/* The API ships body copy only, so nothing here invents content the
@@ -61,9 +52,13 @@ export default function StaticPageView() {
         {typeof strengths === "string" ? <h2 className="section__title">{strengths}</h2> : null}
 
         <div className="prose">
-          {paragraphs.map((paragraph, index) => (
-            <p key={index}>{paragraph}</p>
-          ))}
+          {paragraphs.map((paragraph, index) =>
+            paragraph.startsWith("## ") ? (
+              <h2 key={index}>{paragraph.slice(3)}</h2>
+            ) : (
+              <p key={index}>{paragraph}</p>
+            ),
+          )}
         </div>
       </div>
     </>

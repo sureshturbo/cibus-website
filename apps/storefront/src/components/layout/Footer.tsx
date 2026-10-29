@@ -83,7 +83,13 @@ export default function Footer() {
               <Link to="/page/mission">Our mission</Link>
             </li>
             <li>
+              <Link to="/contact">Contact us</Link>
+            </li>
+            <li>
               <Link to="/account/orders">Track an order</Link>
+            </li>
+            <li>
+              <Link to="/page/privacy-policy">Privacy policy</Link>
             </li>
           </ul>
         </div>

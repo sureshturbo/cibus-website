@@ -12,6 +12,7 @@ import Checkout from "./pages/Checkout.js";
 import Account from "./pages/Account.js";
 import OrderConfirmationPage from "./pages/OrderConfirmation.js";
 import StaticPageView from "./pages/StaticPage.js";
+import Contact from "./pages/Contact.js";
 import NotFound from "./pages/NotFound.js";
 import AdminApp from "./admin/App.js";
 
@@ -42,6 +43,7 @@ export default function App() {
                 <Route path="order-confirmation/:id" element={<OrderConfirmationPage />} />
                 <Route path="account" element={<Account />} />
                 <Route path="account/orders" element={<Account />} />
+                <Route path="contact" element={<Contact />} />
                 <Route path="page/:slug" element={<StaticPageView />} />
                 <Route path="*" element={<NotFound />} />
               </Route>

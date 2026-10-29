@@ -236,6 +236,14 @@ export const HERO_BANNERS = [
  */
 export const BRAND_LOGO = "/images/logo.webp";
 
+/** Header artwork for the information pages, keyed by page slug. */
+export const PAGE_HERO_IMAGES: Record<string, string> = {
+  about: HERO_BANNERS[1],
+  contact: HERO_BANNERS[0],
+};
+
+export const DEFAULT_PAGE_HERO_IMAGE = HERO_BANNERS[0];
+
 export function primaryImageOf(
   product: { images: ProductImage[]; primaryImage?: ProductImage | null },
 ): ProductImage | null {

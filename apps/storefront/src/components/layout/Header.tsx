@@ -145,9 +145,9 @@ function DesktopHeader() {
               About Us
             </Link>
 
-            <a href="#contact" className="nav-link">
+            <Link to="/contact" className="nav-link">
               Contact Us
-            </a>
+            </Link>
           </nav>
 
           <HeaderActions />

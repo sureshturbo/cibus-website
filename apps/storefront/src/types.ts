@@ -102,7 +102,8 @@ export interface HomePayload {
   highlights: { title: string; description: string; icon: string }[];
   categoriesBlurb: string;
   featuredProducts: Product[];
-  newestProducts: Product[];
+  /** Catalogue order: first category first. */
+  shelfProducts: Product[];
   pages: { slug: string; title: string; subtitle: string | null }[];
 }
 

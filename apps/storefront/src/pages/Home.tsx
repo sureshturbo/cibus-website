@@ -201,33 +201,33 @@ interface ProductTab {
 }
 
 /**
- * Popular products with category tabs. Only the payload's own lists are
- * fetched up front; category tabs load on first use and stay cached for the
- * life of the page so switching back is instant.
+ * Popular products with category tabs. Each tab loads on first use and stays
+ * cached for the life of the page so switching back is instant.
  */
 function PopularProducts({
-  payload,
   categories,
   adding,
   onAdd,
 }: {
-  payload: HomePayload;
   categories: Category[];
   adding: number | null;
   onAdd: (product: Product) => void;
 }) {
-  const tabs = useMemo<ProductTab[]>(() => {
-    const list: ProductTab[] = [{ key: "new", label: "New arrivals" }];
-    for (const category of categories) {
-      list.push({ key: `cat:${category.slug}`, label: category.name, slug: category.slug });
-    }
-    return list;
-  }, [categories]);
+  const tabs = useMemo<ProductTab[]>(
+    () =>
+      categories.map((category) => ({
+        key: `cat:${category.slug}`,
+        label: category.name,
+        slug: category.slug,
+      })),
+    [categories],
+  );
 
-  const [active, setActive] = useState("new");
-  const [cache, setCache] = useState<Record<string, Product[]>>({
-    new: pricedOnly(payload.newestProducts),
-  });
+  // Categories arrive after the page mounts, so until a tab is picked the
+  // first category is the active one.
+  const [picked, setPicked] = useState<string | null>(null);
+  const active = picked ?? tabs[0]?.key ?? "";
+  const [cache, setCache] = useState<Record<string, Product[]>>({});
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -266,7 +266,7 @@ function PopularProducts({
     event.preventDefault();
     const direction = event.key === "ArrowRight" ? 1 : -1;
     const next = tabs[(index + direction + tabs.length) % tabs.length];
-    setActive(next.key);
+    setPicked(next.key);
     event.currentTarget
       .closest(".tabs")
       ?.querySelector<HTMLButtonElement>(`[data-tab="${next.key}"]`)
@@ -283,7 +283,7 @@ function PopularProducts({
             <h2 id="popular-title" className="section__title">
               Popular with our customers
             </h2>
-            <p className="lede">Browse best sellers, new arrivals and everyday categories.</p>
+            <p className="lede">Browse our range by category.</p>
           </div>
           <Link to="/products" className="btn btn--ghost">
             View all
@@ -304,7 +304,7 @@ function PopularProducts({
                 aria-selected={tab.key === active}
                 aria-controls="popular-panel"
                 tabIndex={tab.key === active ? 0 : -1}
-                onClick={() => setActive(tab.key)}
+                onClick={() => setPicked(tab.key)}
                 onKeyDown={(event) => handleKeyDown(event, index)}
               >
                 {tab.label}
@@ -517,7 +517,7 @@ export default function Home() {
     );
   }
 
-  const fresh = pricedOnly(payload.newestProducts);
+  const fresh = pricedOnly(payload.shelfProducts);
 
   return (
     <>
@@ -553,7 +553,6 @@ export default function Home() {
       </section>
 
       <PopularProducts
-        payload={payload}
         categories={categories}
         adding={adding}
         onAdd={(product) => void quickAdd(product)}
@@ -587,7 +586,7 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Newest arrivals, as a grid rather than a rail */}
+      {/* Shelf rail in catalogue order, opening on the first category */}
       {fresh.length > 0 ? (
         <section className="section" aria-labelledby="fresh-title">
           <div className="container">
@@ -598,7 +597,7 @@ export default function Home() {
                 </h2>
                 <p className="lede">The latest additions to our shelves.</p>
               </div>
-              <Link to="/products?sort=newest" className="btn btn--ghost">
+              <Link to="/products" className="btn btn--ghost">
                 See all
                 <Icon name="arrowRight" size={17} />
               </Link>

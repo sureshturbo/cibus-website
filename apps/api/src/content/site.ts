@@ -47,6 +47,7 @@ export interface StaticPageContent {
   vision: ContentSection;
   mission: ContentSection;
   whatWeDo: ContentSection;
+  privacy: ContentSection;
 }
 
 export const COMPANY_INFO: CompanyInfo = {
@@ -172,5 +173,31 @@ export const STATIC_PAGES: StaticPageContent = {
         },
       ],
     },
+  },
+  // "## " lines in the body render as section headings on the storefront.
+  privacy: {
+    slug: "privacy-policy",
+    title: "Privacy Policy",
+    subtitle: "How we handle your information",
+    body: [
+      "This policy explains what information Cibus Trading collects when you use this website, why we collect it, and the choices you have. Last updated: 29 October 2026.",
+      "## Information we collect",
+      "When you create an account or place an order we collect your name, email address, phone number and delivery address, together with the details of the orders you place. If you send us a trade enquiry, we keep the details you submit with it.",
+      "## How we use it",
+      "We use your information to review and confirm your orders, arrange payment and delivery, contact you about an order, and answer your enquiries. We do not use it for advertising and we do not sell it.",
+      "## Payments",
+      "No payment is taken on this website. Payment is arranged directly with you when we confirm your order, so we never receive or store your card details here.",
+      "## Cookies",
+      "We use only the cookies needed for the site to work: two keep you signed in and one remembers the contents of your cart. We do not use advertising or tracking cookies.",
+      "## Sharing",
+      "We share your details only where it is needed to fulfil your order, for example with a delivery partner, or where the law requires it.",
+      "## Keeping your information safe",
+      "Passwords are stored in a scrambled form that cannot be read back, and access to customer records is limited to staff who need it to handle orders. We keep order records for as long as we need them for accounting and legal purposes.",
+      "## Your choices",
+      "You can view and update your account details at any time. To ask for a copy of your information, a correction, or for your account to be deleted, contact us using the details on our Contact page.",
+      "## Changes to this policy",
+      "If we change how we handle your information we will update this page and the date above.",
+    ].join("\n\n"),
+    meta: {},
   },
 };
