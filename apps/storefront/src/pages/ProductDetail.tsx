@@ -8,6 +8,7 @@ import { useCart } from "../context/CartContext.js";
 import { useAuth } from "../context/AuthContext.js";
 import { useUi } from "../context/UiContext.js";
 import { useToast } from "../components/ui/Toast.js";
+import { SHOP_ENABLED } from "../config.js";
 import type { ProductDetail } from "../types.js";
 
 export default function ProductDetail() {
@@ -55,7 +56,7 @@ export default function ProductDetail() {
   if (!product) return <div className="container section" aria-busy="true" />;
 
   const image = product.images[activeImage] ?? primaryImageOf(product);
-  const percent = discountPercent(product.price, product.compareAtPrice);
+  const percent = SHOP_ENABLED ? discountPercent(product.price, product.compareAtPrice) : null;
   const maxQuantity = product.maxQuantity;
 
   const addToCart = async () => {
@@ -83,7 +84,14 @@ export default function ProductDetail() {
     }
   };
 
-  const buyBlock = (
+  const buyBlock = !SHOP_ENABLED ? (
+    <div className="detail__buy">
+      <Link to="/contact" className="btn btn--lg">
+        <Icon name="phone" size={18} />
+        Contact us for price
+      </Link>
+    </div>
+  ) : (
     <div className="detail__buy">
       {product.inStock ? (
         <>
@@ -176,12 +184,14 @@ export default function ProductDetail() {
               SKU {product.sku} &middot; sold per {product.unitLabel}
             </p>
 
-            <div className="detail__price">
-              <span className="detail__price-now">{formatMoney(product.price)}</span>
-              {percent ? (
-                <span className="detail__price-was">{formatMoney(product.compareAtPrice ?? 0)}</span>
-              ) : null}
-            </div>
+            {SHOP_ENABLED ? (
+              <div className="detail__price">
+                <span className="detail__price-now">{formatMoney(product.price)}</span>
+                {percent ? (
+                  <span className="detail__price-was">{formatMoney(product.compareAtPrice ?? 0)}</span>
+                ) : null}
+              </div>
+            ) : null}
 
             {product.shortDescription ? <p className="detail__desc">{product.shortDescription}</p> : null}
 
@@ -237,7 +247,7 @@ export default function ProductDetail() {
       ) : null}
 
       {/* Sticky add-to-cart, mirroring the reference's mobile treatment. */}
-      {product.inStock ? (
+      {SHOP_ENABLED && product.inStock ? (
         <div className="sticky-atc sticky-atc--visible">
           <span className="sticky-atc__price">
             <small>{product.name}</small>

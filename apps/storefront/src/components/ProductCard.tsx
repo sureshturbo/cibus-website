@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import Icon from "./Icon.js";
 import { discountPercent, formatMoney, primaryImageOf } from "../api.js";
+import { SHOP_ENABLED } from "../config.js";
 import type { Product, ProductImage, RelatedProduct } from "../types.js";
 
 /** The one shape the card needs, so catalogue and related cards cannot drift. */
@@ -49,7 +50,7 @@ function Card({
 }) {
   const [failed, setFailed] = useState(false);
   const image = data.primaryImage;
-  const percent = discountPercent(data.price, data.compareAtPrice);
+  const percent = SHOP_ENABLED ? discountPercent(data.price, data.compareAtPrice) : null;
 
   return (
     <article className="card">
@@ -93,7 +94,7 @@ function Card({
         </Link>
       </div>
 
-      {onAdd && data.inStock ? (
+      {SHOP_ENABLED && onAdd && data.inStock ? (
         <div className="card__atc">
           <button
             type="button"
@@ -114,13 +115,15 @@ function Card({
           <Link to={`/product/${data.slug}`}>{data.name}</Link>
         </h3>
 
-        <div className="card__price">
-          <span className="card__price-now">{formatMoney(data.price)}</span>
-          {percent ? (
-            <span className="card__price-was">{formatMoney(data.compareAtPrice ?? 0)}</span>
-          ) : null}
-          <span className="card__unit">/ {data.unitLabel}</span>
-        </div>
+        {SHOP_ENABLED ? (
+          <div className="card__price">
+            <span className="card__price-now">{formatMoney(data.price)}</span>
+            {percent ? (
+              <span className="card__price-was">{formatMoney(data.compareAtPrice ?? 0)}</span>
+            ) : null}
+            <span className="card__unit">/ {data.unitLabel}</span>
+          </div>
+        ) : null}
 
         <span className={data.inStock ? "card__stock card__stock--in" : "card__stock card__stock--out"}>
           {data.inStock ? "In stock" : "Out of stock"}

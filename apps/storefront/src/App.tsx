@@ -1,4 +1,5 @@
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
+import { SHOP_ENABLED } from "./config.js";
 import Layout from "./components/layout/Layout.js";
 import { CartProvider } from "./context/CartContext.js";
 import { AuthProvider } from "./context/AuthContext.js";
@@ -38,11 +39,22 @@ export default function App() {
                 <Route index element={<Home />} />
                 <Route path="products" element={<Products />} />
                 <Route path="product/:slug" element={<ProductDetail />} />
-                <Route path="cart" element={<CartPage />} />
-                <Route path="checkout" element={<Checkout />} />
-                <Route path="order-confirmation/:id" element={<OrderConfirmationPage />} />
-                <Route path="account" element={<Account />} />
-                <Route path="account/orders" element={<Account />} />
+                {SHOP_ENABLED ? (
+                  <>
+                    <Route path="cart" element={<CartPage />} />
+                    <Route path="checkout" element={<Checkout />} />
+                    <Route path="order-confirmation/:id" element={<OrderConfirmationPage />} />
+                    <Route path="account" element={<Account />} />
+                    <Route path="account/orders" element={<Account />} />
+                  </>
+                ) : (
+                  <>
+                    <Route path="cart" element={<Navigate to="/" replace />} />
+                    <Route path="checkout" element={<Navigate to="/" replace />} />
+                    <Route path="order-confirmation/:id" element={<Navigate to="/" replace />} />
+                    <Route path="account/*" element={<Navigate to="/" replace />} />
+                  </>
+                )}
                 <Route path="contact" element={<Contact />} />
                 <Route path="page/:slug" element={<StaticPageView />} />
                 <Route path="*" element={<NotFound />} />

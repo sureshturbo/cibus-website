@@ -58,6 +58,8 @@ const APP_CSP = [
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data: blob:",
   "connect-src 'self'",
+  // The Contact page embeds a Google Maps iframe of the office location.
+  "frame-src https://maps.google.com https://www.google.com",
   "base-uri 'self'",
   "frame-ancestors 'none'",
   "form-action 'self'",

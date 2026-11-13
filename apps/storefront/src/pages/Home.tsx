@@ -6,6 +6,7 @@ import { api, HERO_BANNERS } from "../api.js";
 import { useCart } from "../context/CartContext.js";
 import { useUi } from "../context/UiContext.js";
 import { useToast } from "../components/ui/Toast.js";
+import { SHOP_ENABLED } from "../config.js";
 import type { Category, HomePayload, Product } from "../types.js";
 
 /**
@@ -36,7 +37,7 @@ function HeroSlider({ payload }: { payload: HomePayload }) {
     return [
       {
         key: "primary",
-        eyebrow: "Cibus Trading",
+        eyebrow: "Cibus Trading Inc.",
         image: HERO_BANNERS[0],
         title: (
           <>
@@ -652,14 +653,28 @@ export default function Home() {
         <div className="container">
           <div className="notice notice--wide">
             <Icon name="info" size={22} />
-            <div>
-              <strong id="ordering-title">How ordering works.</strong> Add what you need, sign in,
-              and our team reviews every order before confirming. Payment is arranged directly with
-              you, so nothing is charged automatically.
-            </div>
-            <Link to="/products" className="btn">
-              Start shopping
-            </Link>
+            {SHOP_ENABLED ? (
+              <>
+                <div>
+                  <strong id="ordering-title">How ordering works.</strong> Add what you need, sign
+                  in, and our team reviews every order before confirming. Payment is arranged
+                  directly with you, so nothing is charged automatically.
+                </div>
+                <Link to="/products" className="btn">
+                  Start shopping
+                </Link>
+              </>
+            ) : (
+              <>
+                <div>
+                  <strong id="ordering-title">How ordering works.</strong> Browse the catalogue,
+                  then contact our sales team for prices and to place your order.
+                </div>
+                <Link to="/contact" className="btn">
+                  Contact sales
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </section>
@@ -667,7 +682,7 @@ export default function Home() {
       {/* Closing full-bleed call to action */}
       <section className="cta-band" aria-labelledby="cta-title">
         <div className="container cta-band__inner">
-          <p className="cta-band__eyebrow">Cibus Trading</p>
+          <p className="cta-band__eyebrow">Cibus Trading Inc.</p>
           <h2 id="cta-title" className="cta-band__title">
             Stock your kitchen with food you can trust.
           </h2>

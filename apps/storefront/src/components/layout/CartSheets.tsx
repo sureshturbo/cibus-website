@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Icon from "../Icon.js";
 import { api, discountPercent, formatMoney, PLACEHOLDER_IMAGES, primaryImageOf } from "../../api.js";
+import { SHOP_ENABLED } from "../../config.js";
 import { useCart } from "../../context/CartContext.js";
 import Sheet from "../ui/Sheet.js";
 import QuantityStepper from "../ui/QuantityStepper.js";
@@ -206,11 +207,15 @@ export function SearchSheet({ open, onClose }: { open: boolean; onClose: () => v
               )}
               <span>
                 <span className="search-result__name">{product.name}</span>
-                <br />
-                <span className="search-result__price">
-                  {formatMoney(product.price)}
-                  {percent ? ` · -${percent}%` : ""}
-                </span>
+                {SHOP_ENABLED ? (
+                  <>
+                    <br />
+                    <span className="search-result__price">
+                      {formatMoney(product.price)}
+                      {percent ? ` · -${percent}%` : ""}
+                    </span>
+                  </>
+                ) : null}
               </span>
             </Link>
           );

@@ -79,6 +79,7 @@ export interface SiteConfig {
     email: string;
     phone: string;
     address: string;
+    mapUrl: string;
     businessHours: string;
     socialLinks: Array<{ platform: string; url: string }>;
   };

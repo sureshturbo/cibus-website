@@ -3,6 +3,7 @@ import Icon from "./../Icon.js";
 import type { IconName } from "./../Icon.js";
 import { BRAND_LOGO } from "../../api.js";
 import { useUi } from "../../context/UiContext.js";
+import { SHOP_ENABLED } from "../../config.js";
 
 const SOCIAL_ICONS: Record<string, IconName> = {
   x: "x",
@@ -11,6 +12,14 @@ const SOCIAL_ICONS: Record<string, IconName> = {
   linkedin: "linkedin",
   facebook: "facebook",
 };
+
+/** The company phone field can hold several numbers separated by commas. */
+export function phoneNumbers(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(/[,/]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
 
 export default function Footer() {
   const { config, categories } = useUi();
@@ -21,11 +30,11 @@ export default function Footer() {
     <footer className="site-footer">
       <div className="container footer__cols">
         <div>
-          <Link to="/" className="brand" aria-label="Cibus Trading home">
+          <Link to="/" className="brand" aria-label={`${company?.name ?? "Cibus Trading Inc."} home`}>
             <img
               className="brand__logo"
               src={BRAND_LOGO}
-              alt={company?.name ?? "Cibus Trading"}
+              alt={company?.name ?? "Cibus Trading Inc."}
               width={480}
               height={431}
             />
@@ -85,9 +94,11 @@ export default function Footer() {
             <li>
               <Link to="/contact">Contact us</Link>
             </li>
-            <li>
-              <Link to="/account/orders">Track an order</Link>
-            </li>
+            {SHOP_ENABLED ? (
+              <li>
+                <Link to="/account/orders">Track an order</Link>
+              </li>
+            ) : null}
             <li>
               <Link to="/page/privacy-policy">Privacy policy</Link>
             </li>
@@ -99,11 +110,24 @@ export default function Footer() {
           <ul className="footer__contact">
             <li className="footer__contact-item">
               <Icon name="mapPin" size={17} />
-              {company?.address}
+              {company?.mapUrl ? (
+                <a href={company.mapUrl} target="_blank" rel="noreferrer noopener">
+                  {company.address}
+                </a>
+              ) : (
+                company?.address
+              )}
             </li>
             <li className="footer__contact-item">
               <Icon name="phone" size={17} />
-              {company?.phone}
+              <span>
+                {phoneNumbers(company?.phone).map((number, index) => (
+                  <span key={number}>
+                    {index > 0 ? " / " : ""}
+                    <a href={`tel:${number.replace(/[^\d+]/g, "")}`}>{number}</a>
+                  </span>
+                ))}
+              </span>
             </li>
             <li className="footer__contact-item">
               <Icon name="mail" size={17} />
@@ -119,11 +143,13 @@ export default function Footer() {
 
       <div className="container footer__bar">
         <span>
-          &copy; {year} {company?.name ?? "Cibus Trading"}. All rights reserved.
+          &copy; {year} {company?.name ?? "Cibus Trading Inc."}. All rights reserved.
         </span>
         <span>
           <Icon name="shield" size={15} />
-          Payments are arranged when we confirm your order.
+          {SHOP_ENABLED
+            ? "Payments are arranged when we confirm your order."
+            : "Contact our sales team for prices and orders."}
         </span>
       </div>
     </footer>

@@ -26,6 +26,7 @@ export interface CompanyInfo {
   email: string;
   phone: string;
   address: string;
+  mapUrl: string;
   businessHours: string;
   socialLinks: Array<{ platform: string; url: string }>;
 }
@@ -51,13 +52,14 @@ export interface StaticPageContent {
 }
 
 export const COMPANY_INFO: CompanyInfo = {
-  name: "Cibus Trading",
+  name: "Cibus Trading Inc.",
   tagline: "Quality provisions, delivered with care",
   description:
-    "Cibus Trading supplies dependable food and everyday essentials to homes and businesses, with transparent pricing and dependable delivery.",
-  email: "hello@cibus.example",
-  phone: "+91 00000 00000",
-  address: "Cibus Trading, Business Address, India",
+    "Cibus Trading Inc. supplies dependable food and everyday essentials to homes and businesses, with transparent pricing and dependable delivery.",
+  email: "sales@cibus.gy",
+  phone: "7169440, +592716994",
+  address: "3182 Block III Providence, East Bank Demerara, Guyana",
+  mapUrl: "https://maps.app.goo.gl/h45LWQoFd8ZhFvoJ9",
   businessHours: "Monday to Saturday, 9:00 - 19:00",
   socialLinks: [
     { platform: "X", url: "https://x.com" },
@@ -71,7 +73,7 @@ export const HOME_CONTENT: HomeContent = {
     headline: "Everyday essentials, sourced with",
     highlight: "care and delivered fast",
     subheadline:
-      "From pantry staples to fresh picks, Cibus Trading keeps homes and kitchens supplied without the guesswork.",
+      "From pantry staples to fresh picks, Cibus Trading Inc. keeps homes and kitchens supplied without the guesswork.",
     primaryCta: "Browse products",
     secondaryCta: "Partner with us",
   },
@@ -103,10 +105,10 @@ export const HOME_CONTENT: HomeContent = {
 export const STATIC_PAGES: StaticPageContent = {
   about: {
     slug: "about",
-    title: "About Cibus Trading",
+    title: "About Cibus Trading Inc.",
     subtitle: "Who we are",
     body: [
-      "Cibus Trading began with a straightforward idea: sourcing food and everyday essentials should not be complicated. We work directly with trusted suppliers, inspect what arrives, and pass it on at a fair price.",
+      "Cibus Trading Inc. began with a straightforward idea: sourcing food and everyday essentials should not be complicated. We work directly with trusted suppliers, inspect what arrives, and pass it on at a fair price.",
       "Today we supply households, restaurants and institutions across the region. Our catalogue covers pantry staples, fresh produce, packaged goods and cleaning supplies, and it keeps growing as our customers ask for more.",
       "We are a small team that answers its own phone. If something is wrong with an order, tell us and we will make it right.",
     ].join("\n\n"),
@@ -150,7 +152,7 @@ export const STATIC_PAGES: StaticPageContent = {
     title: "What We Do",
     subtitle: "Our business activities",
     body: [
-      "Cibus Trading operates across four areas: sourcing and quality control, wholesale and retail supply, order fulfilment and delivery, and trade partnerships for bulk buyers.",
+      "Cibus Trading Inc. operates across four areas: sourcing and quality control, wholesale and retail supply, order fulfilment and delivery, and trade partnerships for bulk buyers.",
       "We work with households buying for a week and with kitchens and institutions buying in bulk. The same catalogue, the same standards, different volumes.",
     ].join("\n\n"),
     meta: {
@@ -180,7 +182,7 @@ export const STATIC_PAGES: StaticPageContent = {
     title: "Privacy Policy",
     subtitle: "How we handle your information",
     body: [
-      "This policy explains what information Cibus Trading collects when you use this website, why we collect it, and the choices you have. Last updated: 29 October 2026.",
+      "This policy explains what information Cibus Trading Inc. collects when you use this website, why we collect it, and the choices you have. Last updated: 29 October 2026.",
       "## Information we collect",
       "When you create an account or place an order we collect your name, email address, phone number and delivery address, together with the details of the orders you place. If you send us a trade enquiry, we keep the details you submit with it.",
       "## How we use it",

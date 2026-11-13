@@ -7,14 +7,19 @@ import { api } from "../api.js";
 import { useUi } from "../context/UiContext.js";
 import { useCart } from "../context/CartContext.js";
 import { useToast } from "../components/ui/Toast.js";
+import { SHOP_ENABLED } from "../config.js";
 import type { PageMeta, Product } from "../types.js";
 
 const SORT_OPTIONS = [
   { value: "newest", label: "Newest first" },
   { value: "name_asc", label: "Name: A to Z" },
   { value: "name_desc", label: "Name: Z to A" },
-  { value: "price_asc", label: "Price: low to high" },
-  { value: "price_desc", label: "Price: high to low" },
+  ...(SHOP_ENABLED
+    ? [
+        { value: "price_asc", label: "Price: low to high" },
+        { value: "price_desc", label: "Price: high to low" },
+      ]
+    : []),
 ];
 
 const PAGE_SIZE = 12;

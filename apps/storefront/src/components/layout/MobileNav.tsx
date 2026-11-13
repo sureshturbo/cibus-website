@@ -4,6 +4,7 @@ import Icon from "../Icon.js";
 import type { IconName } from "../Icon.js";
 import { useUi } from "../../context/UiContext.js";
 import { useAuth } from "../../context/AuthContext.js";
+import { SHOP_ENABLED } from "../../config.js";
 
 const TABS: { to: string; icon: IconName; label: string }[] = [
   { to: "/", icon: "home", label: "Home" },
@@ -11,6 +12,12 @@ const TABS: { to: string; icon: IconName; label: string }[] = [
   { to: "/cart", icon: "cart", label: "Cart" },
   { to: "/account/orders", icon: "box", label: "Orders" },
   { to: "/account", icon: "user", label: "Account" },
+];
+
+const CATALOGUE_TABS: { to: string; icon: IconName; label: string }[] = [
+  { to: "/", icon: "home", label: "Home" },
+  { to: "/products", icon: "grid4", label: "Products" },
+  { to: "/contact", icon: "phone", label: "Contact" },
 ];
 
 /**
@@ -23,7 +30,11 @@ export default function MobileNav() {
   const { sheet } = useUi();
   const { user } = useAuth();
 
-  const tabs = user ? TABS : TABS.filter((tab) => tab.to !== "/account");
+  const tabs = !SHOP_ENABLED
+    ? CATALOGUE_TABS
+    : user
+      ? TABS
+      : TABS.filter((tab) => tab.to !== "/account");
 
   return (
     <nav

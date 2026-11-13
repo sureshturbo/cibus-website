@@ -86,10 +86,10 @@ const schema = z.object({
   SEED_ADMIN_PASSWORD: z.string().min(10).default("ChangeMe!2026"),
   SEED_ADMIN_NAME: z.string().min(2).default("Cibus Administrator"),
 
-  COMPANY_NAME: z.string().default("Cibus Trading"),
-  COMPANY_EMAIL: z.string().default("hello@cibus.example"),
-  COMPANY_PHONE: z.string().default("+91 00000 00000"),
-  COMPANY_ADDRESS: z.string().default("Cibus Trading, Business Address, India"),
+  COMPANY_NAME: z.string().default("Cibus Trading Inc."),
+  COMPANY_EMAIL: z.string().default("sales@cibus.gy"),
+  COMPANY_PHONE: z.string().default("7169440, +592716994"),
+  COMPANY_ADDRESS: z.string().default("3182 Block III Providence, East Bank Demerara, Guyana"),
   INVOICE_PREFIX: z.string().min(1).max(8).default("INV"),
   CURRENCY: z.string().length(3).default("INR"),
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import Icon from "../Icon.js";
 import { BRAND_LOGO } from "../../api.js";
+import { SHOP_ENABLED } from "../../config.js";
 import { useCart } from "../../context/CartContext.js";
 import { useUi } from "../../context/UiContext.js";
 import { useAuth } from "../../context/AuthContext.js";
@@ -56,18 +57,26 @@ function HeaderActions() {
       >
         <Icon name="search" size={22} />
       </button>
-      <AccountControl />
-      <CartControl />
+      {SHOP_ENABLED ? (
+        <>
+          <AccountControl />
+          <CartControl />
+        </>
+      ) : null}
     </div>
   );
 }
 
 function CampaignMarquee({ paymentEnabled }: { paymentEnabled: boolean }) {
   const messages = [
-    paymentEnabled
-      ? "Secure online payment available"
-      : "Payment is arranged when we confirm your order",
-    "Every order is reviewed by our team before confirmation",
+    ...(SHOP_ENABLED
+      ? [
+          paymentEnabled
+            ? "Secure online payment available"
+            : "Payment is arranged when we confirm your order",
+          "Every order is reviewed by our team before confirmation",
+        ]
+      : ["For prices and orders, contact sales@cibus.gy", "Call 7169440 or +592716994"]),
     "Tattva masalas and whole spices, product of India",
     "Dhanyasri pickles, pastes and appalam now available",
   ];
@@ -105,11 +114,11 @@ function DesktopHeader() {
 
       <div className="header-main">
         <div className="container header-main__inner">
-          <Link to="/" className="brand" aria-label={`${company?.name ?? "Cibus Trading"} home`}>
+          <Link to="/" className="brand" aria-label={`${company?.name ?? "Cibus Trading Inc."} home`}>
             <img
               className="brand__logo"
               src={BRAND_LOGO}
-              alt={company?.name ?? "Cibus Trading"}
+              alt={company?.name ?? "Cibus Trading Inc."}
               width={480}
               height={431}
             />
@@ -173,11 +182,11 @@ function MobileHeader() {
         <Icon name="menu" size={24} />
       </button>
 
-      <Link to="/" className="brand" aria-label={`${company?.name ?? "Cibus Trading"} home`}>
+      <Link to="/" className="brand" aria-label={`${company?.name ?? "Cibus Trading Inc."} home`}>
         <img
           className="brand__logo"
           src={BRAND_LOGO}
-          alt={company?.name ?? "Cibus Trading"}
+          alt={company?.name ?? "Cibus Trading Inc."}
           width={480}
           height={431}
         />
@@ -187,8 +196,12 @@ function MobileHeader() {
         <button type="button" className="icon-btn" aria-label="Search" onClick={() => toggle("search")}>
           <Icon name="search" size={22} />
         </button>
-        <AccountControl />
-        <CartControl />
+        {SHOP_ENABLED ? (
+          <>
+            <AccountControl />
+            <CartControl />
+          </>
+        ) : null}
       </div>
     </div>
   );
@@ -216,7 +229,7 @@ export default function Header() {
       <DesktopHeader />
       <MobileHeader />
 
-      {cart?.hasUnavailableItems ? (
+      {SHOP_ENABLED && cart?.hasUnavailableItems ? (
         <div className="header-alert">
           <Icon name="alert" size={16} />
           Some items in your cart are no longer available.{" "}
