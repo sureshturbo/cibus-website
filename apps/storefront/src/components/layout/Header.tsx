@@ -119,8 +119,8 @@ function DesktopHeader() {
               className="brand__logo"
               src={BRAND_LOGO}
               alt={company?.name ?? "Cibus Trading Inc."}
-              width={480}
-              height={431}
+              width={463}
+              height={400}
             />
           </Link>
 
@@ -187,8 +187,8 @@ function MobileHeader() {
           className="brand__logo"
           src={BRAND_LOGO}
           alt={company?.name ?? "Cibus Trading Inc."}
-          width={480}
-          height={431}
+          width={463}
+          height={400}
         />
       </Link>
 
