@@ -123,6 +123,9 @@ function HeroSlider({ payload }: { payload: HomePayload }) {
             key={item.key}
             className={isActive ? "hero__slide hero__slide--active" : "hero__slide"}
             aria-hidden={isActive ? undefined : true}
+            /* aria-hidden alone leaves the hidden slides' links tabbable;
+               inert removes them from focus and touch as well. */
+            {...(isActive ? {} : ({ inert: "" } as Record<string, string>))}
           >
             <img
               className="hero__bg"

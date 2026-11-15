@@ -63,7 +63,7 @@ export default function Footer() {
         </div>
 
         <div>
-          <h4 className="footer__title">Shop</h4>
+          <h2 className="footer__title">Shop</h2>
           <ul className="footer__list">
             <li>
               <Link to="/products">All products</Link>
@@ -77,7 +77,7 @@ export default function Footer() {
         </div>
 
         <div>
-          <h4 className="footer__title">Company</h4>
+          <h2 className="footer__title">Company</h2>
           <ul className="footer__list">
             <li>
               <Link to="/page/about">About us</Link>
@@ -106,7 +106,7 @@ export default function Footer() {
         </div>
 
         <div id="contact">
-          <h4 className="footer__title">Get in touch</h4>
+          <h2 className="footer__title">Get in touch</h2>
           <ul className="footer__contact">
             <li className="footer__contact-item">
               <Icon name="mapPin" size={17} />

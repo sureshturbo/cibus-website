@@ -77,7 +77,10 @@
   animation-delay: 170ms;
 }
 
+/* Buttons slide without fading: a half-faded button fails contrast checks
+   (Lighthouse samples mid-animation) and is briefly hard to read. */
 .hero__slide--active .hero__actions {
+  animation-name: hero-slide;
   animation-delay: 260ms;
 }
 
@@ -92,6 +95,15 @@
   }
   to {
     opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes hero-slide {
+  from {
+    transform: translateY(22px);
+  }
+  to {
     transform: translateY(0);
   }
 }
@@ -222,17 +234,20 @@
   left: 50%;
   z-index: 3;
   display: flex;
-  gap: var(--space-2);
   transform: translateX(-50%);
 }
 
+/* The visible dot stays 9px, but the transparent border pads the tap target
+   to 25px tall; with the gap that clears the 24px touch-target guideline. */
 .hero__dot {
+  box-sizing: content-box;
   width: 9px;
   height: 9px;
   padding: 0;
-  border: 0;
+  border: 8px solid transparent;
   border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.45);
+  background-clip: content-box;
   cursor: pointer;
   transition: all var(--t-base);
 }

@@ -1,0 +1,17 @@
+# Cibus Trading Inc.
+
+> Food and grocery supplier in Guyana. This website is a product catalogue: prices are not shown online and orders are placed by contacting the sales team.
+
+Contact: sales@cibus.gy · Tel 7169440 / +592716994 · 3182 Block III Providence, East Bank Demerara, Guyana
+
+## Catalogue
+
+- [All products](https://cibus.gy/products): the full product range, filterable by category
+- [Sitemap](https://cibus.gy/sitemap.xml): every product and category page
+
+## Company
+
+- [About us](https://cibus.gy/page/about)
+- [What we do](https://cibus.gy/page/what-we-do)
+- [Contact us](https://cibus.gy/contact): phone, email, address and map
+- [Privacy policy](https://cibus.gy/page/privacy-policy)
