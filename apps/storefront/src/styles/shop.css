@@ -409,6 +409,21 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+  transform-origin: var(--zoom-x, 50%) var(--zoom-y, 50%);
+  transition: transform 0.2s ease;
+}
+
+/* Hover zoom: the image scales up around the cursor, so moving the mouse
+   pans across the enlarged photo inside the same frame. */
+@media (hover: hover) and (pointer: fine) {
+  .gallery__main {
+    cursor: zoom-in;
+  }
+
+  .gallery__main--zoom img {
+    transform: scale(2.2);
+    transition: none;
+  }
 }
 
 .gallery__thumbs {

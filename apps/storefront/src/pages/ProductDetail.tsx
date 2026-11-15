@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { Link, useParams } from "react-router-dom";
 import Icon from "../components/Icon.js";
 import { RelatedCard } from "../components/ProductCard.js";
@@ -23,6 +23,9 @@ export default function ProductDetail() {
   const [quantity, setQuantity] = useState(1);
   const [activeImage, setActiveImage] = useState(0);
   const [adding, setAdding] = useState(false);
+  const [zoom, setZoom] = useState<{ x: number; y: number } | null>(null);
+  const canHoverZoom =
+    typeof window !== "undefined" && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
 
   useEffect(() => {
     setProduct(null);
@@ -142,7 +145,20 @@ export default function ProductDetail() {
       <div className="container section">
         <div className="detail">
           <div className="gallery">
-            <div className="gallery__main">
+            <div
+              className={zoom ? "gallery__main gallery__main--zoom" : "gallery__main"}
+              style={zoom ? ({ "--zoom-x": `${zoom.x}%`, "--zoom-y": `${zoom.y}%` } as CSSProperties) : undefined}
+              onMouseMove={(event) => {
+                // Mouse only: on touch screens a "hover" zoom would hijack scrolling.
+                if (!canHoverZoom || product.images.length === 0) return;
+                const box = event.currentTarget.getBoundingClientRect();
+                setZoom({
+                  x: ((event.clientX - box.left) / box.width) * 100,
+                  y: ((event.clientY - box.top) / box.height) * 100,
+                });
+              }}
+              onMouseLeave={() => setZoom(null)}
+            >
               {image ? (
                 <img src={image.url} alt={image.altText ?? product.name} />
               ) : (

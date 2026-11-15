@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import Icon from "../components/Icon.js";
 import { ProductCard } from "../components/ProductCard.js";
+import PageHero from "../components/layout/PageHero.js";
 import Sheet from "../components/ui/Sheet.js";
 import { api } from "../api.js";
 import { useUi } from "../context/UiContext.js";
@@ -11,8 +12,8 @@ import { SHOP_ENABLED } from "../config.js";
 import type { PageMeta, Product } from "../types.js";
 
 const SORT_OPTIONS = [
-  { value: "newest", label: "Newest first" },
   { value: "name_asc", label: "Name: A to Z" },
+  { value: "newest", label: "Newest first" },
   { value: "name_desc", label: "Name: Z to A" },
   ...(SHOP_ENABLED
     ? [
@@ -23,6 +24,7 @@ const SORT_OPTIONS = [
 ];
 
 const PAGE_SIZE = 12;
+const DEFAULT_SORT = "name_asc";
 
 type View = "2" | "3" | "4";
 
@@ -52,7 +54,7 @@ export default function Products() {
 
   const category = params.get("category") ?? "";
   const search = params.get("search") ?? "";
-  const sort = params.get("sort") ?? "newest";
+  const sort = params.get("sort") ?? DEFAULT_SORT;
   const inStock = params.get("inStock") ?? "";
 
   const [view, setView] = useState<View>("4");
@@ -78,12 +80,14 @@ export default function Products() {
     setParams(next, { replace: true });
   };
 
-  useEffect(() => {
-    setPage(1);
-  }, [category, search, sort, inStock]);
+  /* Each request gets a number so a slow response for an old filter cannot
+     overwrite the results of a newer one. */
+  const requestRef = useRef(0);
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(
     async (targetPage: number, append: boolean) => {
+      const request = ++requestRef.current;
       if (append) setLoadingMore(true);
       else setLoading(true);
 
@@ -97,22 +101,57 @@ export default function Products() {
           ...(inStock ? { inStock } : {}),
         });
 
+        if (request !== requestRef.current) return;
         setMeta(result.meta);
+        setPage(targetPage);
         setItems((current) => (append ? [...current, ...result.items] : result.items));
       } catch {
+        if (request !== requestRef.current) return;
         if (!append) setItems([]);
         toast.push("We could not load these products.", "error");
       } finally {
-        setLoading(false);
-        setLoadingMore(false);
+        if (request === requestRef.current) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
     },
     [category, search, sort, inStock, toast],
   );
 
+  // A filter change rebuilds `load`, which restarts the list from page one.
   useEffect(() => {
-    void load(page, false);
-  }, [load, page]);
+    void load(1, false);
+  }, [load]);
+
+  const hasMore = meta !== null && page < meta.totalPages;
+  const loadNextRef = useRef<() => void>(() => {});
+  loadNextRef.current = () => {
+    if (loading || loadingMore || !hasMore) return;
+    void load(page + 1, true);
+  };
+
+  /* Infinite scroll: fetch the next page while the end of the grid is still
+     a screen away, so products are usually there before the shopper arrives. */
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadNextRef.current();
+      },
+      { rootMargin: "600px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loading, items.length > 0]);
+
+  // If the first page is too short to reach the sentinel, keep filling.
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel || loading || loadingMore || !hasMore) return;
+    if (sentinel.getBoundingClientRect().top < window.innerHeight + 600) loadNextRef.current();
+  }, [items.length, loading, loadingMore, hasMore]);
 
   const quickAdd = async (productId: number) => {
     setAdding(productId);
@@ -182,7 +221,7 @@ export default function Products() {
           className="btn btn--ghost btn--block"
           onClick={() => {
             const next = new URLSearchParams();
-            if (sort !== "newest") next.set("sort", sort);
+            if (sort !== DEFAULT_SORT) next.set("sort", sort);
             setParams(next, { replace: true });
           }}
         >
@@ -200,15 +239,11 @@ export default function Products() {
 
   return (
     <>
-      <div className="page-head">
-        <div className="container">
-          <nav className="breadcrumbs" aria-label="Breadcrumb">
-            <Link to="/">Home</Link>
-            <Icon name="chevronRight" size={14} />
-            <span>{title}</span>
-          </nav>
-        </div>
-      </div>
+      <PageHero
+        slug="products"
+        title={title}
+        subtitle={activeCategory || search ? "Food Products" : "Our catalogue"}
+      />
 
       <div className="container section">
         {/* Toolbar: filters on the left, view switch in the middle, sort on the right. */}
@@ -310,17 +345,18 @@ export default function Products() {
                 ))}
               </div>
 
-              {meta && page < meta.totalPages ? (
-                <div className="load-more">
-                  <button
-                    type="button"
-                    className="btn btn--ghost btn--lg"
-                    disabled={loadingMore}
-                    onClick={() => setPage((current) => current + 1)}
-                  >
-                    {loadingMore ? "Loading" : "Load more products"}
-                  </button>
+              {loadingMore ? (
+                <div className="grid-loader load-more" aria-busy="true" aria-label="Loading more products">
+                  {Array.from({ length: 4 }, (_, index) => (
+                    <div key={index} className="skeleton-card" />
+                  ))}
                 </div>
+              ) : null}
+
+              <div ref={sentinelRef} aria-hidden="true" />
+
+              {!hasMore && meta && meta.total > PAGE_SIZE ? (
+                <p className="load-more muted">You have seen all {meta.total} products.</p>
               ) : null}
             </div>
           </div>

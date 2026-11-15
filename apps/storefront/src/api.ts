@@ -213,7 +213,9 @@ export const api = {
  * for real product media as it is added.
  */
 export const PLACEHOLDER_IMAGES = {
-  product: "/images/product.webp",
+  // Neutral, transparent graphic: a product without a photo must not borrow
+  // a picture of some other item.
+  product: "/images/no-image.svg",
   hero: "/images/hero.webp",
   category: "/images/category.webp",
   feature: "/images/feature.webp",
@@ -240,6 +242,7 @@ export const BRAND_LOGO = "/images/logo.webp";
 export const PAGE_HERO_IMAGES: Record<string, string> = {
   about: HERO_BANNERS[1],
   contact: HERO_BANNERS[0],
+  products: HERO_BANNERS[0],
 };
 
 export const DEFAULT_PAGE_HERO_IMAGE = HERO_BANNERS[0];

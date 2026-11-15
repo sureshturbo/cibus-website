@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import Icon from "./Icon.js";
-import { discountPercent, formatMoney, primaryImageOf } from "../api.js";
+import { discountPercent, formatMoney, PLACEHOLDER_IMAGES, primaryImageOf } from "../api.js";
 import { SHOP_ENABLED } from "../config.js";
 import type { Product, ProductImage, RelatedProduct } from "../types.js";
 
@@ -67,7 +67,7 @@ function Card({
         {image && !failed ? (
           <img
             className="card__img"
-            src={failed ? "/images/product.webp" : image.url}
+            src={failed ? PLACEHOLDER_IMAGES.product : image.url}
             alt={image.altText ?? data.name}
             loading="lazy"
             onError={() => setFailed(true)}
