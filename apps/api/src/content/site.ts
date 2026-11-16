@@ -57,7 +57,7 @@ export const COMPANY_INFO: CompanyInfo = {
   description:
     "Cibus Trading Inc. supplies dependable food and everyday essentials to homes and businesses, with transparent pricing and dependable delivery.",
   email: "sales@cibus.gy",
-  phone: "7169440, +592716994",
+  phone: "+5927169940, +592716994",
   address: "3182 Block III Providence, East Bank Demerara, Guyana",
   mapUrl: "https://maps.app.goo.gl/h45LWQoFd8ZhFvoJ9",
   businessHours: "Monday to Saturday, 9:00 - 19:00",

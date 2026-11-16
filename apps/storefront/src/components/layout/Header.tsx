@@ -76,7 +76,7 @@ function CampaignMarquee({ paymentEnabled }: { paymentEnabled: boolean }) {
             : "Payment is arranged when we confirm your order",
           "Every order is reviewed by our team before confirmation",
         ]
-      : ["For prices and orders, contact sales@cibus.gy", "Call 7169440 or +592716994"]),
+      : ["For prices and orders, contact sales@cibus.gy", "Call +5927169940 or +592716994"]),
     "Tattva masalas and whole spices, product of India",
     "Dhanyasri pickles, pastes and appalam now available",
   ];

@@ -88,7 +88,7 @@ const schema = z.object({
 
   COMPANY_NAME: z.string().default("Cibus Trading Inc."),
   COMPANY_EMAIL: z.string().default("sales@cibus.gy"),
-  COMPANY_PHONE: z.string().default("7169440, +592716994"),
+  COMPANY_PHONE: z.string().default("+5927169940, +592716994"),
   COMPANY_ADDRESS: z.string().default("3182 Block III Providence, East Bank Demerara, Guyana"),
   INVOICE_PREFIX: z.string().min(1).max(8).default("INV"),
   CURRENCY: z.string().length(3).default("INR"),
