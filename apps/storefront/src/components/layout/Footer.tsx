@@ -18,7 +18,10 @@ export function phoneNumbers(value: string | undefined): string[] {
   return (value ?? "")
     .split(/[,/]/)
     .map((entry) => entry.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    // Only the first number is shown for now: the client has not confirmed the
+    // second. Drop this slice to show every number again.
+    .slice(0, 1);
 }
 
 export default function Footer() {
